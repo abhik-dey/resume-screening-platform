@@ -1,0 +1,83 @@
+name: resume-screening-platform
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: rsp_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-resume_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-resume_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-resume_screening}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-resume_user}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - rsp_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: rsp_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - rsp_network
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: rsp_backend
+    restart: unless-stopped
+    env_file:
+      - ../backend/.env
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../backend/app:/app/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - rsp_network
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: rsp_frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+    ports:
+      - "5173:5173"
+    volumes:
+      - ../frontend/src:/app/src
+    depends_on:
+      - backend
+    networks:
+      - rsp_network
+
+networks:
+  rsp_network:
+    driver: bridge
+
+volumes:
+  postgres_data:

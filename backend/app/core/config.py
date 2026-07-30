@@ -1,0 +1,55 @@
+"""
+Centralized, environment-driven configuration.
+
+All settings are read from environment variables (or a .env file in local
+dev). Nothing in this module is hardcoded to a specific deployment target —
+that's what makes the same image work in dev, staging, and prod by just
+changing env vars.
+"""
+from functools import lru_cache
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """Application-wide settings, validated at startup by Pydantic."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    # --- App metadata ---
+    app_name: str = "AI Resume Screening Platform"
+    environment: str = Field(default="development")
+    debug: bool = Field(default=True)
+
+    # --- PostgreSQL ---
+    postgres_user: str = Field(default="resume_user")
+    postgres_password: str = Field(default="resume_pass")
+    postgres_db: str = Field(default="resume_screening")
+    postgres_host: str = Field(default="postgres")
+    postgres_port: int = Field(default=5432)
+
+    @property
+    def database_url(self) -> str:
+        """Async SQLAlchemy connection string (asyncpg driver)."""
+        return (
+            f"postgresql+asyncpg://{self.postgres_user}:{self.postgres_password}"
+            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        )
+
+    # --- Redis ---
+    redis_host: str = Field(default="redis")
+    redis_port: int = Field(default=6379)
+
+    @property
+    def redis_url(self) -> str:
+        return f"redis://{self.redis_host}:{self.redis_port}/0"
+
+    # --- CORS ---
+    cors_origins: list[str] = Field(default=["http://localhost:5173"])
+
+
+@lru_cache
+def get_settings() -> Settings:
+    """Cached settings singleton — avoids re-parsing env vars on every call."""
+    return Settings()
