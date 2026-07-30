@@ -50,6 +50,8 @@ services:
       - "8000:8000"
     volumes:
       - ../backend/app:/app/app
+      - ../backend/alembic:/app/alembic
+      - ../backend/tests:/app/tests
     depends_on:
       postgres:
         condition: service_healthy

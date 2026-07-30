@@ -48,6 +48,14 @@ class Settings(BaseSettings):
     # --- CORS ---
     cors_origins: list[str] = Field(default=["http://localhost:5173"])
 
+    # --- Auth / JWT ---
+    # NOTE: the default below is fine for local dev only. Production MUST
+    # override this via the JWT_SECRET_KEY env var with a long random value
+    # (e.g. `openssl rand -hex 32`) — this is enforced in Phase 19 (Security).
+    jwt_secret_key: str = Field(default="dev-only-insecure-secret-change-me")
+    jwt_algorithm: str = Field(default="HS256")
+    access_token_expire_minutes: int = Field(default=60)
+
 
 @lru_cache
 def get_settings() -> Settings:

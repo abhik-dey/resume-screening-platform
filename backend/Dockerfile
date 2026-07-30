@@ -7,10 +7,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY requirements.txt requirements-dev.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
+COPY alembic ./alembic
+COPY alembic.ini pytest.ini pyproject.toml ./
+COPY tests ./tests
 
 EXPOSE 8000
 

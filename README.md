@@ -1,8 +1,10 @@
-# AI Resume Screening Platform — Phase 2: Environment Setup
+# AI Resume Screening Platform
 
-This phase stands up the full local dev environment: FastAPI, PostgreSQL,
-Redis, and a React (Vite + TS + Tailwind) frontend, all orchestrated via
-Docker Compose. No business logic yet — this is a connectivity smoke test.
+Progress so far: **Phase 2** (Environment Setup) + **Phase 3** (Authentication).
+
+This stands up the full local dev environment — FastAPI, PostgreSQL, Redis,
+and a React (Vite + TS + Tailwind) frontend, all orchestrated via Docker
+Compose — plus JWT-based authentication with role-based access control.
 
 ## Prerequisites
 
@@ -67,3 +69,61 @@ cd frontend
 npm install
 npm run dev
 ```
+
+## Authentication (Phase 3)
+
+The API now has JWT-based auth with three roles: `admin`, `recruiter`, `viewer`.
+The **first account ever registered becomes admin automatically** (bootstrap);
+every registration after that is restricted to `recruiter`/`viewer` — requesting
+`admin` returns `403 Forbidden`.
+
+### 1. Apply the database migration (creates the `users` table)
+
+```bash
+make migrate
+```
+
+### 2. Register the first (admin) user
+
+```bash
+curl -s -X POST http://localhost:8000/api/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"founder@company.com","password":"supersecret1","full_name":"Founder"}'
+```
+
+### 3. Log in (returns a JWT)
+
+```bash
+curl -s -X POST http://localhost:8000/api/v1/auth/login \
+  -d "username=founder@company.com&password=supersecret1"
+```
+
+### 4. Call a protected route
+
+```bash
+TOKEN="<paste access_token from step 3>"
+curl -s http://localhost:8000/api/v1/auth/me -H "Authorization: Bearer $TOKEN"
+```
+
+You can also use Swagger UI's **Authorize** button at http://localhost:8000/docs —
+paste your email/password there and it calls `/login` for you automatically.
+
+### Creating new migrations
+
+Whenever you add/change a model under `app/infrastructure/db/models/`:
+
+```bash
+make migration name="add jobs table"   # generates a new versions/*.py file
+make migrate                            # applies it
+```
+
+## Running Tests
+
+```bash
+make test    # runs the full pytest suite (unit + API) inside the backend container
+make lint    # runs ruff over app/ and tests/
+```
+
+Tests run against an in-memory SQLite database (not the real Postgres), so
+`make test` works even before `make migrate` has been run.
+

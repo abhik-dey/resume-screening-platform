@@ -1,0 +1,10 @@
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
+# B008: FastAPI's dependency-injection convention (`= Depends(...)` as an
+# argument default) is intentional and required — not the bug this rule
+# assumes it is in general Python code.
+ignore = ["B008"]
