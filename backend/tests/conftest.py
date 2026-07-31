@@ -14,8 +14,8 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+import app.infrastructure.db.models  # noqa: F401 -- registers every table with Base
 from app.infrastructure.db.base import Base
-from app.infrastructure.db.models.user import UserModel  # noqa: F401 -- registers table with Base
 from app.infrastructure.db.session import get_db
 from app.main import app
 

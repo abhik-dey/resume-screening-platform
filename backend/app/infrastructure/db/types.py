@@ -1,16 +1,15 @@
 """
-Cross-dialect UUID type.
+Cross-dialect UUID and JSON types.
 
-Production runs on PostgreSQL, which has a native UUID type. But our API
-test suite (Phase 3 onward) runs against an in-memory SQLite database for
-speed and isolation, and SQLite has no native UUID type. This TypeDecorator
-lets the exact same ORM model work correctly against both — Postgres gets
-its efficient native UUID column, SQLite gets a stringified CHAR(36).
-
-This is the standard SQLAlchemy pattern for portable UUID columns.
+Production runs on PostgreSQL, which has native UUID and JSONB types. But
+our test suite (Phase 3 onward) runs against an in-memory SQLite database
+for speed and isolation, and SQLite has neither. These type decorators let
+the exact same ORM models work correctly against both.
 """
 import uuid
 
+from sqlalchemy import JSON
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.types import CHAR, TypeDecorator
 
@@ -39,3 +38,10 @@ class GUID(TypeDecorator):
         if not isinstance(value, uuid.UUID):
             return uuid.UUID(str(value))
         return value
+
+
+# A single reusable TypeEngine instance: JSONB on Postgres (indexable,
+# efficient), plain JSON everywhere else (e.g. SQLite in tests). Import and
+# reuse this constant across model columns rather than constructing a new
+# variant type per column.
+PORTABLE_JSON = JSON().with_variant(JSONB(), "postgresql")

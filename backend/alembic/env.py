@@ -18,7 +18,7 @@ from app.infrastructure.db.base import Base
 
 # Import every ORM model here so Base.metadata knows about it and
 # `alembic revision --autogenerate` can detect new tables/columns.
-from app.infrastructure.db.models.user import UserModel  # noqa: F401
+import app.infrastructure.db.models  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:
