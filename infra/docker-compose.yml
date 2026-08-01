@@ -52,6 +52,7 @@ services:
       - ../backend/app:/app/app
       - ../backend/alembic:/app/alembic
       - ../backend/tests:/app/tests
+      - resume_storage:/app/storage/resumes
     depends_on:
       postgres:
         condition: service_healthy
@@ -83,3 +84,4 @@ networks:
 
 volumes:
   postgres_data:
+  resume_storage:

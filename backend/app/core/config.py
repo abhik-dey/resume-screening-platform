@@ -56,6 +56,16 @@ class Settings(BaseSettings):
     jwt_algorithm: str = Field(default="HS256")
     access_token_expire_minutes: int = Field(default=60)
 
+    # --- File Storage (Phase 5) ---
+    # Local disk today; the FileStorage interface lets this become an S3
+    # adapter later without touching ResumeService.
+    resume_storage_dir: str = Field(default="./storage/resumes")
+    max_resume_upload_size_mb: int = Field(default=10)
+
+    @property
+    def max_resume_upload_size_bytes(self) -> int:
+        return self.max_resume_upload_size_mb * 1024 * 1024
+
 
 @lru_cache
 def get_settings() -> Settings:

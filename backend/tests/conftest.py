@@ -15,8 +15,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import StaticPool
 
 import app.infrastructure.db.models  # noqa: F401 -- registers every table with Base
+from app.api.deps import get_file_storage
 from app.infrastructure.db.base import Base
 from app.infrastructure.db.session import get_db
+from app.infrastructure.storage.local_file_storage import LocalFileStorage
 from app.main import app
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
@@ -46,11 +48,15 @@ async def db_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
 
 
 @pytest_asyncio.fixture
-async def client(db_session) -> AsyncGenerator[AsyncClient, None]:
+async def client(db_session, tmp_path) -> AsyncGenerator[AsyncClient, None]:
     async def _override_get_db():
         yield db_session
 
+    def _override_get_file_storage():
+        return LocalFileStorage(base_dir=str(tmp_path / "resumes"))
+
     app.dependency_overrides[get_db] = _override_get_db
+    app.dependency_overrides[get_file_storage] = _override_get_file_storage
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
