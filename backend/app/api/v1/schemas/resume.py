@@ -19,6 +19,16 @@ class ResumeResponse(BaseModel):
     candidate_id: UUID | None
     original_filename: str
     status: ResumeStatus
+    parsed_data: dict | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class ResumeParseResult(BaseModel):
+    """Response for POST /resumes/{id}/parse — includes the agent's reasoning
+    (Phase 1's traceability requirement), not just the updated resume."""
+
+    resume: ResumeResponse
+    success: bool
+    reasoning: str

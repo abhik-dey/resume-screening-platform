@@ -66,6 +66,19 @@ class Settings(BaseSettings):
     def max_resume_upload_size_bytes(self) -> int:
         return self.max_resume_upload_size_mb * 1024 * 1024
 
+    # --- LLM Provider (Phase 6) ---
+    # Which adapter to use — "openai" or "anthropic". Never hardcode
+    # provider-specific logic in agents; everything goes through this.
+    llm_provider: str = Field(default="anthropic")
+    openai_api_key: str = Field(default="")
+    openai_model: str = Field(default="gpt-4o-mini")
+    # Override to point the OpenAI SDK at any OpenAI-compatible endpoint —
+    # e.g. Google's free Gemini API (see .env.example for the exact value).
+    # Leave blank to use OpenAI's own API.
+    openai_base_url: str = Field(default="")
+    anthropic_api_key: str = Field(default="")
+    anthropic_model: str = Field(default="claude-sonnet-4-5")
+
 
 @lru_cache
 def get_settings() -> Settings:

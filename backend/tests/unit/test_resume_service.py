@@ -47,6 +47,10 @@ class FakeResumeRepository(ResumeRepository):
         self._resumes[resume.id] = resume
         return resume
 
+    async def update(self, resume: Resume) -> Resume:
+        self._resumes[resume.id] = resume
+        return resume
+
     async def get_by_id(self, resume_id: uuid.UUID) -> Resume | None:
         return self._resumes.get(resume_id)
 

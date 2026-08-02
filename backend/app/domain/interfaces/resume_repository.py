@@ -11,6 +11,11 @@ class ResumeRepository(ABC):
         """Persist a new resume and return the stored representation."""
 
     @abstractmethod
+    async def update(self, resume: Resume) -> Resume:
+        """Persist changes to an existing resume (e.g. after parsing) and
+        return the updated representation."""
+
+    @abstractmethod
     async def get_by_id(self, resume_id: UUID) -> Resume | None:
         """Return the resume with this id, or None if no such resume exists."""
 

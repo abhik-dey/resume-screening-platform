@@ -12,11 +12,16 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.resume_parser.agent import ResumeParsingAgent
 from app.core.config import get_settings
 from app.core.security import TokenError, decode_access_token
 from app.domain.entities.user import User, UserRole
 from app.domain.interfaces.file_storage import FileStorage
+from app.domain.interfaces.llm_provider import LLMProvider
 from app.infrastructure.db.session import get_db
+from app.infrastructure.llm.factory import get_llm_provider
+from app.infrastructure.repositories.sqlalchemy_audit_log_repository import SQLAlchemyAuditLogRepository
+from app.infrastructure.repositories.sqlalchemy_candidate_repository import SQLAlchemyCandidateRepository
 from app.infrastructure.repositories.sqlalchemy_job_repository import SQLAlchemyJobRepository
 from app.infrastructure.repositories.sqlalchemy_resume_repository import SQLAlchemyResumeRepository
 from app.infrastructure.repositories.sqlalchemy_user_repository import SQLAlchemyUserRepository
@@ -73,6 +78,38 @@ async def get_resume_service(
         job_repository=job_repo,
         file_storage=storage,
         max_upload_size_bytes=settings.max_resume_upload_size_bytes,
+    )
+
+
+async def get_candidate_repository(db: AsyncSession = Depends(get_db)) -> SQLAlchemyCandidateRepository:
+    return SQLAlchemyCandidateRepository(db)
+
+
+async def get_audit_log_repository(db: AsyncSession = Depends(get_db)) -> SQLAlchemyAuditLogRepository:
+    return SQLAlchemyAuditLogRepository(db)
+
+
+def get_llm_provider_dependency() -> LLMProvider:
+    return get_llm_provider(settings)
+
+
+async def get_resume_parsing_agent(
+    audit_repo: SQLAlchemyAuditLogRepository = Depends(get_audit_log_repository),
+    resume_repo: SQLAlchemyResumeRepository = Depends(get_resume_repository),
+    candidate_repo: SQLAlchemyCandidateRepository = Depends(get_candidate_repository),
+    storage: FileStorage = Depends(get_file_storage),
+    llm: LLMProvider = Depends(get_llm_provider_dependency),
+) -> ResumeParsingAgent:
+    model_name = (
+        settings.openai_model if settings.llm_provider == "openai" else settings.anthropic_model
+    )
+    return ResumeParsingAgent(
+        audit_log_repository=audit_repo,
+        resume_repository=resume_repo,
+        candidate_repository=candidate_repo,
+        file_storage=storage,
+        llm_provider=llm,
+        model_name=model_name,
     )
 
 

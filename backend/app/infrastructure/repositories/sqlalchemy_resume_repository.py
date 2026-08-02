@@ -49,6 +49,18 @@ class SQLAlchemyResumeRepository(ResumeRepository):
         model = await self._session.get(ResumeModel, resume_id)
         return _to_entity(model) if model else None
 
+    async def update(self, resume: Resume) -> Resume:
+        model = await self._session.get(ResumeModel, resume.id)
+        if model is None:
+            raise ValueError(f"Cannot update resume {resume.id}: not found")
+        model.candidate_id = resume.candidate_id
+        model.raw_text = resume.raw_text
+        model.parsed_data = resume.parsed_data
+        model.status = resume.status
+        await self._session.commit()
+        await self._session.refresh(model)
+        return _to_entity(model)
+
     async def list_by_job(self, job_id: UUID, skip: int = 0, limit: int = 50) -> list[Resume]:
         result = await self._session.execute(
             select(ResumeModel)

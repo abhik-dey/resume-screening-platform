@@ -1,4 +1,19 @@
-"""API-level tests for resume upload/list/get/download."""
+"""API-level tests for resume upload/list/get/download/parse."""
+import io
+
+from app.api.deps import get_llm_provider_dependency
+from app.main import app
+from tests.fakes import VALID_PARSED_RESUME_JSON, ScriptedLLMProvider
+
+
+def _build_real_pdf_bytes(text: str) -> bytes:
+    from reportlab.pdfgen import canvas
+
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer)
+    c.drawString(72, 720, text)
+    c.save()
+    return buffer.getvalue()
 
 
 async def _register_and_login(client, email: str, role: str | None = None):
@@ -179,3 +194,83 @@ async def test_viewer_can_view_but_not_upload(client):
     )
     assert list_resp.status_code == 200
     assert len(list_resp.json()) == 1
+
+
+async def test_parse_resume_success(client):
+    token = await _register_and_login(client, "recruiter10@company.com")
+    job_id = await _create_open_job(client, token)
+    real_pdf = _build_real_pdf_bytes("Jane Doe resume content for parsing")
+    upload_resp = await client.post(
+        f"/api/v1/jobs/{job_id}/resumes",
+        files={"file": ("resume.pdf", real_pdf, "application/pdf")},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    resume_id = upload_resp.json()["id"]
+
+    parse_resp = await client.post(
+        f"/api/v1/resumes/{resume_id}/parse", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert parse_resp.status_code == 200
+    body = parse_resp.json()
+    assert body["success"] is True
+    assert body["resume"]["status"] == "parsed"
+    assert body["resume"]["candidate_id"] is not None
+    assert body["resume"]["parsed_data"]["full_name"] == "Jane Doe"
+
+
+async def test_parse_nonexistent_resume_returns_404(client):
+    token = await _register_and_login(client, "recruiter11@company.com")
+    resp = await client.post(
+        "/api/v1/resumes/00000000-0000-0000-0000-000000000000/parse",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 404
+
+
+async def test_viewer_cannot_trigger_parse(client):
+    admin_token = await _register_and_login(client, "admin7@company.com")
+    job_id = await _create_open_job(client, admin_token)
+    real_pdf = _build_real_pdf_bytes("Some resume content")
+    upload_resp = await client.post(
+        f"/api/v1/jobs/{job_id}/resumes",
+        files={"file": ("resume.pdf", real_pdf, "application/pdf")},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    resume_id = upload_resp.json()["id"]
+    viewer_token = await _register_and_login(client, "viewer4@company.com", role="viewer")
+
+    resp = await client.post(
+        f"/api/v1/resumes/{resume_id}/parse", headers={"Authorization": f"Bearer {viewer_token}"}
+    )
+    assert resp.status_code == 403
+
+
+async def test_parse_reports_failure_without_raising_http_error(client):
+    token = await _register_and_login(client, "recruiter12@company.com")
+    job_id = await _create_open_job(client, token)
+    real_pdf = _build_real_pdf_bytes("Some resume content")
+    upload_resp = await client.post(
+        f"/api/v1/jobs/{job_id}/resumes",
+        files={"file": ("resume.pdf", real_pdf, "application/pdf")},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    resume_id = upload_resp.json()["id"]
+
+    # Force the LLM to return unparseable garbage on both attempts.
+    app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+        ["garbage", "still garbage"]
+    )
+    try:
+        parse_resp = await client.post(
+            f"/api/v1/resumes/{resume_id}/parse", headers={"Authorization": f"Bearer {token}"}
+        )
+    finally:
+        # Restore the default for any subsequent test using this client.
+        app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+            [VALID_PARSED_RESUME_JSON]
+        )
+
+    assert parse_resp.status_code == 200  # a handled failure, not an HTTP error
+    body = parse_resp.json()
+    assert body["success"] is False
+    assert body["resume"]["status"] == "failed"

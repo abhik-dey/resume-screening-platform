@@ -4,8 +4,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from fastapi.responses import Response
 
-from app.api.deps import get_current_user, get_resume_service, require_roles
-from app.api.v1.schemas.resume import ResumeResponse
+from app.agents.resume_parser.agent import ResumeParsingAgent
+from app.api.deps import get_current_user, get_resume_parsing_agent, get_resume_service, require_roles
+from app.api.v1.schemas.resume import ResumeParseResult, ResumeResponse
 from app.domain.entities.resume import Resume
 from app.domain.entities.user import User, UserRole
 from app.domain.validation.resume_file import ResumeValidationError
@@ -94,4 +95,28 @@ async def download_resume(
         content=content,
         media_type=content_type,
         headers={"Content-Disposition": f'attachment; filename="{resume.original_filename}"'},
+    )
+
+
+@router.post("/api/v1/resumes/{resume_id}/parse", response_model=ResumeParseResult)
+async def parse_resume(
+    resume_id: UUID,
+    current_user: User = Depends(require_roles(UserRole.RECRUITER, UserRole.ADMIN)),
+    resume_service: ResumeService = Depends(get_resume_service),
+    parsing_agent: ResumeParsingAgent = Depends(get_resume_parsing_agent),
+) -> ResumeParseResult:
+    # Confirm the resume exists before invoking the agent — a 404 here is a
+    # routing error, not a parsing failure, so it shouldn't be swallowed
+    # into the agent's success/failure result.
+    try:
+        await resume_service.get_resume(resume_id)
+    except ResumeNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    result = await parsing_agent.parse(resume_id)
+    updated_resume = await resume_service.get_resume(resume_id)
+    return ResumeParseResult(
+        resume=ResumeResponse.model_validate(updated_resume),
+        success=result.success,
+        reasoning=result.reasoning,
     )
