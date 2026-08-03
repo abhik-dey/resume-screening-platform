@@ -50,6 +50,7 @@ async def test_all_expected_tables_are_registered(test_engine):
     expected = {
         "users", "recruiter_profiles", "jobs", "candidates", "resumes",
         "skills", "resume_skills", "scores", "reports", "audit_logs",
+        "interview_questions",
     }
     assert expected.issubset(set(table_names))
 
@@ -240,3 +241,38 @@ async def test_report_relationships(db_session):
 
     assert report.job.title == "Product Manager"
     assert report.generated_by_user.email == "recruiter@company.com"
+
+
+async def test_deleting_resume_cascades_to_interview_questions(db_session):
+    from app.domain.entities.interview_question import QuestionCategory, QuestionDifficulty
+    from app.infrastructure.db.models.interview_question import InterviewQuestionModel
+
+    user = await _make_recruiter(db_session)
+    job = JobModel(id=uuid.uuid4(), created_by=user.id, title="Engineer", description="...")
+    db_session.add(job)
+    await db_session.commit()
+
+    resume = ResumeModel(
+        id=uuid.uuid4(), job_id=job.id, uploaded_by=user.id,
+        storage_path="q.pdf", original_filename="q.pdf",
+    )
+    db_session.add(resume)
+    await db_session.commit()
+
+    db_session.add(
+        InterviewQuestionModel(
+            id=uuid.uuid4(), resume_id=resume.id, job_id=job.id,
+            question="Tell me about your project.",
+            category=QuestionCategory.PROJECT, difficulty=QuestionDifficulty.MEDIUM,
+            rationale="Explores listed work.",
+        )
+    )
+    await db_session.commit()
+
+    await db_session.delete(resume)
+    await db_session.commit()
+
+    remaining = await db_session.execute(
+        select(InterviewQuestionModel).where(InterviewQuestionModel.resume_id == resume.id)
+    )
+    assert remaining.first() is None

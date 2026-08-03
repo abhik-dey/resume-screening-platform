@@ -4,11 +4,14 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from fastapi.responses import Response
 
+from app.agents.interview_question.agent import InterviewQuestionAgent
 from app.agents.matching.agent import MatchingAgent
 from app.agents.resume_parser.agent import ResumeParsingAgent
 from app.agents.skill_extractor.agent import SkillExtractionAgent
 from app.api.deps import (
     get_current_user,
+    get_interview_question_agent,
+    get_interview_question_repository,
     get_matching_agent,
     get_resume_parsing_agent,
     get_resume_service,
@@ -17,11 +20,17 @@ from app.api.deps import (
     get_skill_extraction_agent,
     require_roles,
 )
+from app.api.v1.schemas.interview_question import (
+    InterviewQuestionGenerationResult,
+    InterviewQuestionRequest,
+    InterviewQuestionResponse,
+)
 from app.api.v1.schemas.resume import ResumeParseResult, ResumeResponse
 from app.api.v1.schemas.score import MatchResultResponse, ScoreResponse
 from app.api.v1.schemas.skill import ResumeSkillResponse, SkillExtractionResult
 from app.domain.entities.resume import Resume
 from app.domain.entities.user import User, UserRole
+from app.domain.interfaces.interview_question_repository import InterviewQuestionRepository
 from app.domain.interfaces.resume_skill_repository import ResumeSkillRepository
 from app.domain.interfaces.score_repository import ScoreRepository
 from app.domain.validation.resume_file import ResumeValidationError
@@ -231,3 +240,60 @@ async def get_resume_score(
             detail=f"Resume {resume_id} has not been matched yet — run POST /resumes/{resume_id}/match first",
         )
     return ScoreResponse.model_validate(score)
+
+
+@router.post(
+    "/api/v1/resumes/{resume_id}/interview-questions",
+    response_model=InterviewQuestionGenerationResult,
+)
+async def generate_interview_questions(
+    resume_id: UUID,
+    payload: InterviewQuestionRequest | None = None,
+    current_user: User = Depends(require_roles(UserRole.RECRUITER, UserRole.ADMIN)),
+    resume_service: ResumeService = Depends(get_resume_service),
+    question_agent: InterviewQuestionAgent = Depends(get_interview_question_agent),
+    question_repo: InterviewQuestionRepository = Depends(get_interview_question_repository),
+) -> InterviewQuestionGenerationResult:
+    """Generate interview questions tailored to this candidate and job.
+
+    Regenerating REPLACES any previous set rather than appending to it.
+    Unlike scoring, this has no deterministic fallback — if generation
+    fails, nothing is saved and `success` is false, rather than returning
+    fabricated placeholder questions.
+    """
+    try:
+        await resume_service.get_resume(resume_id)
+    except ResumeNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    count = payload.question_count if payload else 9
+    result = await question_agent.generate(resume_id, question_count=count)
+    output = result.output or {}
+    saved = await question_repo.list_by_resume(resume_id) if result.success else []
+
+    return InterviewQuestionGenerationResult(
+        success=result.success,
+        reasoning=result.reasoning,
+        questions=[InterviewQuestionResponse.model_validate(q) for q in saved],
+        by_category=output.get("by_category", {}),
+        by_difficulty=output.get("by_difficulty", {}),
+    )
+
+
+@router.get(
+    "/api/v1/resumes/{resume_id}/interview-questions",
+    response_model=list[InterviewQuestionResponse],
+)
+async def list_interview_questions(
+    resume_id: UUID,
+    current_user: User = Depends(get_current_user),
+    resume_service: ResumeService = Depends(get_resume_service),
+    question_repo: InterviewQuestionRepository = Depends(get_interview_question_repository),
+) -> list[InterviewQuestionResponse]:
+    try:
+        await resume_service.get_resume(resume_id)
+    except ResumeNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    questions = await question_repo.list_by_resume(resume_id)
+    return [InterviewQuestionResponse.model_validate(q) for q in questions]

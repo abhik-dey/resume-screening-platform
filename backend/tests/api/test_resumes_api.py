@@ -571,3 +571,187 @@ async def test_viewer_can_read_score(client):
         f"/api/v1/resumes/{resume_id}/score", headers={"Authorization": f"Bearer {viewer_token}"}
     )
     assert resp.status_code == 200  # read-only access is the viewer role's purpose
+
+
+QUESTIONS_JSON = """{
+  "questions": [
+    {"question": "How would you containerize the service you built?",
+     "category": "technical", "difficulty": "medium",
+     "rationale": "Probes a gap found during matching."},
+    {"question": "Describe a technical disagreement you navigated.",
+     "category": "behavioral", "difficulty": "easy",
+     "rationale": "Collaboration signal."}
+  ]
+}"""
+
+
+def _use_questions_llm():
+    app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+        [QUESTIONS_JSON]
+    )
+
+
+def _restore_llm():
+    app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+        [VALID_PARSED_RESUME_JSON]
+    )
+
+
+async def _prepare_parsed_resume(client, token, email_suffix=""):
+    job_id = await _create_open_job(client, token)
+    upload_resp = await client.post(
+        f"/api/v1/jobs/{job_id}/resumes",
+        files={"file": ("resume.pdf", _build_real_pdf_bytes("Jane Doe resume"), "application/pdf")},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    resume_id = upload_resp.json()["id"]
+    await client.post(f"/api/v1/resumes/{resume_id}/parse", headers={"Authorization": f"Bearer {token}"})
+    await client.post(
+        f"/api/v1/resumes/{resume_id}/extract-skills", headers={"Authorization": f"Bearer {token}"}
+    )
+    return job_id, resume_id
+
+
+async def test_generate_interview_questions_success(client):
+    token = await _register_and_login(client, "recruiter40@company.com")
+    _, resume_id = await _prepare_parsed_resume(client, token)
+
+    _use_questions_llm()
+    try:
+        resp = await client.post(
+            f"/api/v1/resumes/{resume_id}/interview-questions",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    finally:
+        _restore_llm()
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is True
+    assert len(body["questions"]) == 2
+    assert body["by_category"] == {"technical": 1, "behavioral": 1}
+    assert all(q["rationale"] for q in body["questions"])
+
+
+async def test_generate_interview_questions_failure_saves_nothing(client):
+    token = await _register_and_login(client, "recruiter41@company.com")
+    _, resume_id = await _prepare_parsed_resume(client, token)
+
+    app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+        ["garbage", "still garbage"]
+    )
+    try:
+        resp = await client.post(
+            f"/api/v1/resumes/{resume_id}/interview-questions",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    finally:
+        _restore_llm()
+
+    assert resp.status_code == 200  # handled failure, not an HTTP error
+    body = resp.json()
+    assert body["success"] is False
+    assert body["questions"] == []
+
+    # Confirm nothing was persisted either.
+    list_resp = await client.get(
+        f"/api/v1/resumes/{resume_id}/interview-questions",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert list_resp.json() == []
+
+
+async def test_regenerating_replaces_previous_questions(client):
+    token = await _register_and_login(client, "recruiter42@company.com")
+    _, resume_id = await _prepare_parsed_resume(client, token)
+
+    _use_questions_llm()
+    try:
+        await client.post(
+            f"/api/v1/resumes/{resume_id}/interview-questions",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        await client.post(
+            f"/api/v1/resumes/{resume_id}/interview-questions",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    finally:
+        _restore_llm()
+
+    list_resp = await client.get(
+        f"/api/v1/resumes/{resume_id}/interview-questions",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert len(list_resp.json()) == 2  # not 4
+
+
+async def test_generate_questions_unparsed_resume_is_handled_failure(client):
+    token = await _register_and_login(client, "recruiter43@company.com")
+    job_id = await _create_open_job(client, token)
+    upload_resp = await client.post(
+        f"/api/v1/jobs/{job_id}/resumes",
+        files={"file": ("resume.pdf", _build_real_pdf_bytes("content"), "application/pdf")},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    resume_id = upload_resp.json()["id"]
+
+    resp = await client.post(
+        f"/api/v1/resumes/{resume_id}/interview-questions",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["success"] is False
+
+
+async def test_generate_questions_nonexistent_resume_returns_404(client):
+    token = await _register_and_login(client, "recruiter44@company.com")
+    resp = await client.post(
+        "/api/v1/resumes/00000000-0000-0000-0000-000000000000/interview-questions",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 404
+
+
+async def test_viewer_cannot_generate_questions(client):
+    admin_token = await _register_and_login(client, "admin30@company.com")
+    _, resume_id = await _prepare_parsed_resume(client, admin_token)
+    viewer_token = await _register_and_login(client, "viewer20@company.com", role="viewer")
+
+    resp = await client.post(
+        f"/api/v1/resumes/{resume_id}/interview-questions",
+        headers={"Authorization": f"Bearer {viewer_token}"},
+    )
+    assert resp.status_code == 403
+
+
+async def test_viewer_can_read_questions(client):
+    admin_token = await _register_and_login(client, "admin31@company.com")
+    _, resume_id = await _prepare_parsed_resume(client, admin_token)
+    _use_questions_llm()
+    try:
+        await client.post(
+            f"/api/v1/resumes/{resume_id}/interview-questions",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+    finally:
+        _restore_llm()
+
+    viewer_token = await _register_and_login(client, "viewer21@company.com", role="viewer")
+    resp = await client.get(
+        f"/api/v1/resumes/{resume_id}/interview-questions",
+        headers={"Authorization": f"Bearer {viewer_token}"},
+    )
+    assert resp.status_code == 200
+    assert len(resp.json()) == 2
+
+
+async def test_question_count_out_of_range_rejected_by_schema(client):
+    token = await _register_and_login(client, "recruiter45@company.com")
+    _, resume_id = await _prepare_parsed_resume(client, token)
+
+    resp = await client.post(
+        f"/api/v1/resumes/{resume_id}/interview-questions",
+        json={"question_count": 500},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 422

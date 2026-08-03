@@ -8,6 +8,7 @@ enough; nobody has to remember to update a second list of imports.
 """
 from app.infrastructure.db.models.audit_log import AuditLogModel
 from app.infrastructure.db.models.candidate import CandidateModel
+from app.infrastructure.db.models.interview_question import InterviewQuestionModel
 from app.infrastructure.db.models.job import JobModel
 from app.infrastructure.db.models.recruiter_profile import RecruiterProfileModel
 from app.infrastructure.db.models.report import ReportModel
@@ -20,6 +21,7 @@ from app.infrastructure.db.models.user import UserModel
 __all__ = [
     "AuditLogModel",
     "CandidateModel",
+    "InterviewQuestionModel",
     "JobModel",
     "RecruiterProfileModel",
     "ReportModel",

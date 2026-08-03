@@ -13,6 +13,7 @@ from app.infrastructure.db.types import GUID, PORTABLE_JSON
 
 if TYPE_CHECKING:
     from app.infrastructure.db.models.candidate import CandidateModel
+    from app.infrastructure.db.models.interview_question import InterviewQuestionModel
     from app.infrastructure.db.models.job import JobModel
     from app.infrastructure.db.models.resume_skill import ResumeSkillModel
     from app.infrastructure.db.models.score import ScoreModel
@@ -57,4 +58,7 @@ class ResumeModel(Base):
     )
     score: Mapped["ScoreModel | None"] = relationship(
         back_populates="resume", uselist=False, cascade="all, delete-orphan"
+    )
+    interview_questions: Mapped[list["InterviewQuestionModel"]] = relationship(
+        back_populates="resume", cascade="all, delete-orphan"
     )
