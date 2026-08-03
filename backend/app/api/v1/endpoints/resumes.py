@@ -5,10 +5,20 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from fastapi.responses import Response
 
 from app.agents.resume_parser.agent import ResumeParsingAgent
-from app.api.deps import get_current_user, get_resume_parsing_agent, get_resume_service, require_roles
+from app.agents.skill_extractor.agent import SkillExtractionAgent
+from app.api.deps import (
+    get_current_user,
+    get_resume_parsing_agent,
+    get_resume_service,
+    get_resume_skill_repository,
+    get_skill_extraction_agent,
+    require_roles,
+)
 from app.api.v1.schemas.resume import ResumeParseResult, ResumeResponse
+from app.api.v1.schemas.skill import ResumeSkillResponse, SkillExtractionResult
 from app.domain.entities.resume import Resume
 from app.domain.entities.user import User, UserRole
+from app.domain.interfaces.resume_skill_repository import ResumeSkillRepository
 from app.domain.validation.resume_file import ResumeValidationError
 from app.services.resume_service import (
     JobNotFoundError,
@@ -120,3 +130,44 @@ async def parse_resume(
         success=result.success,
         reasoning=result.reasoning,
     )
+
+
+@router.post("/api/v1/resumes/{resume_id}/extract-skills", response_model=SkillExtractionResult)
+async def extract_skills(
+    resume_id: UUID,
+    current_user: User = Depends(require_roles(UserRole.RECRUITER, UserRole.ADMIN)),
+    resume_service: ResumeService = Depends(get_resume_service),
+    extraction_agent: SkillExtractionAgent = Depends(get_skill_extraction_agent),
+) -> SkillExtractionResult:
+    # A missing resume is a routing error (404). A resume that exists but
+    # isn't parsed yet is a valid, inspectable outcome — the agent reports
+    # that as a handled failure (success: false), not an HTTP error, same
+    # philosophy as the parse endpoint above.
+    try:
+        await resume_service.get_resume(resume_id)
+    except ResumeNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    result = await extraction_agent.extract(resume_id)
+    output = result.output or {}
+    return SkillExtractionResult(
+        success=result.success,
+        reasoning=result.reasoning,
+        resolved_skills=output.get("resolved_skills", []),
+        unresolved_raw_skills=output.get("unresolved_raw_skills", []),
+    )
+
+
+@router.get("/api/v1/resumes/{resume_id}/skills", response_model=list[ResumeSkillResponse])
+async def list_resume_skills(
+    resume_id: UUID,
+    current_user: User = Depends(get_current_user),
+    resume_service: ResumeService = Depends(get_resume_service),
+    resume_skill_repo: ResumeSkillRepository = Depends(get_resume_skill_repository),
+) -> list:
+    try:
+        await resume_service.get_resume(resume_id)
+    except ResumeNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    return await resume_skill_repo.list_by_resume(resume_id)

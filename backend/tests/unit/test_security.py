@@ -25,7 +25,14 @@ def test_jwt_create_and_decode_roundtrip():
 
 def test_jwt_rejects_tampered_token():
     token = create_access_token(subject="user-123", role="admin")
-    tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
+    # Tamper with the PAYLOAD segment, not the signature's last character.
+    # A JWT's signature is base64url-encoded, and altering only its final
+    # character can decode to the same underlying bytes (base64 padding),
+    # leaving the token genuinely valid — that made an earlier version of
+    # this test intermittently fail. Corrupting the payload is unambiguous.
+    header, payload, signature = token.split(".")
+    tampered_payload = payload[:-1] + ("A" if payload[-1] != "A" else "B")
+    tampered = f"{header}.{tampered_payload}.{signature}"
     with pytest.raises(TokenError):
         decode_access_token(tampered)
 

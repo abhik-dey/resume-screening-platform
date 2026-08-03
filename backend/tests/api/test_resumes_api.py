@@ -274,3 +274,98 @@ async def test_parse_reports_failure_without_raising_http_error(client):
     body = parse_resp.json()
     assert body["success"] is False
     assert body["resume"]["status"] == "failed"
+
+
+async def test_extract_skills_after_parse_success(client):
+    token = await _register_and_login(client, "recruiter13@company.com")
+    job_id = await _create_open_job(client, token)
+    real_pdf = _build_real_pdf_bytes("Jane Doe resume for skill extraction")
+    upload_resp = await client.post(
+        f"/api/v1/jobs/{job_id}/resumes",
+        files={"file": ("resume.pdf", real_pdf, "application/pdf")},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    resume_id = upload_resp.json()["id"]
+    await client.post(f"/api/v1/resumes/{resume_id}/parse", headers={"Authorization": f"Bearer {token}"})
+
+    extract_resp = await client.post(
+        f"/api/v1/resumes/{resume_id}/extract-skills", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert extract_resp.status_code == 200
+    body = extract_resp.json()
+    assert body["success"] is True
+    resolved_names = {s["canonical_name"] for s in body["resolved_skills"]}
+    assert resolved_names == {"Python", "SQL"}  # from VALID_PARSED_RESUME_JSON's skills list
+
+
+async def test_extract_skills_before_parse_is_a_handled_failure(client):
+    token = await _register_and_login(client, "recruiter14@company.com")
+    job_id = await _create_open_job(client, token)
+    real_pdf = _build_real_pdf_bytes("Some resume content")
+    upload_resp = await client.post(
+        f"/api/v1/jobs/{job_id}/resumes",
+        files={"file": ("resume.pdf", real_pdf, "application/pdf")},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    resume_id = upload_resp.json()["id"]
+
+    extract_resp = await client.post(
+        f"/api/v1/resumes/{resume_id}/extract-skills", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert extract_resp.status_code == 200  # handled failure, not an HTTP error
+    body = extract_resp.json()
+    assert body["success"] is False
+    assert "must be parsed" in body["reasoning"].lower()
+
+
+async def test_extract_skills_nonexistent_resume_returns_404(client):
+    token = await _register_and_login(client, "recruiter15@company.com")
+    resp = await client.post(
+        "/api/v1/resumes/00000000-0000-0000-0000-000000000000/extract-skills",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 404
+
+
+async def test_viewer_cannot_extract_skills(client):
+    admin_token = await _register_and_login(client, "admin8@company.com")
+    job_id = await _create_open_job(client, admin_token)
+    real_pdf = _build_real_pdf_bytes("Some resume content")
+    upload_resp = await client.post(
+        f"/api/v1/jobs/{job_id}/resumes",
+        files={"file": ("resume.pdf", real_pdf, "application/pdf")},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    resume_id = upload_resp.json()["id"]
+    viewer_token = await _register_and_login(client, "viewer5@company.com", role="viewer")
+
+    resp = await client.post(
+        f"/api/v1/resumes/{resume_id}/extract-skills", headers={"Authorization": f"Bearer {viewer_token}"}
+    )
+    assert resp.status_code == 403
+
+
+async def test_list_resume_skills_endpoint(client):
+    token = await _register_and_login(client, "recruiter16@company.com")
+    job_id = await _create_open_job(client, token)
+    real_pdf = _build_real_pdf_bytes("Jane Doe resume content")
+    upload_resp = await client.post(
+        f"/api/v1/jobs/{job_id}/resumes",
+        files={"file": ("resume.pdf", real_pdf, "application/pdf")},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    resume_id = upload_resp.json()["id"]
+    await client.post(f"/api/v1/resumes/{resume_id}/parse", headers={"Authorization": f"Bearer {token}"})
+    await client.post(
+        f"/api/v1/resumes/{resume_id}/extract-skills", headers={"Authorization": f"Bearer {token}"}
+    )
+
+    list_resp = await client.get(
+        f"/api/v1/resumes/{resume_id}/skills", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert list_resp.status_code == 200
+    body = list_resp.json()
+    assert len(body) == 2
+    names = {s["name"] for s in body}
+    assert names == {"Python", "SQL"}
+    assert all(s["confidence"] == 1.0 for s in body)

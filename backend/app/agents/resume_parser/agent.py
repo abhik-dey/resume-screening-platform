@@ -13,14 +13,12 @@ Given a resume_id, this agent:
    point where Resume.candidate_id, nullable since Phase 4, gets filled in)
 5. Persists the parsed data and updated status back onto the Resume
 """
-import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from pydantic import ValidationError
-
 from app.agents.base import BaseAgent
+from app.agents.llm_json_utils import call_llm_for_json
 from app.agents.resume_parser.prompts import SYSTEM_PROMPT, build_retry_prompt, build_user_prompt
 from app.agents.resume_parser.schemas import ParsedResumeOutput
 from app.domain.entities.candidate import Candidate
@@ -37,18 +35,6 @@ MAX_LLM_ATTEMPTS = 2
 
 class ResumeParsingError(Exception):
     """Raised when parsing cannot be completed, after all retries are exhausted."""
-
-
-def _strip_markdown_fences(text: str) -> str:
-    """LLMs sometimes wrap JSON in ```json ... ``` even when told not to."""
-    text = text.strip()
-    if text.startswith("```"):
-        lines = text.split("\n")
-        lines = lines[1:]  # drop opening fence (possibly with a language tag)
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        text = "\n".join(lines)
-    return text.strip()
 
 
 class ResumeParsingAgent(BaseAgent):
@@ -114,18 +100,14 @@ class ResumeParsingAgent(BaseAgent):
 
     async def _call_llm_with_retry(self, resume_text: str) -> ParsedResumeOutput | None:
         user_prompt = build_user_prompt(resume_text)
-        last_response = ""
-        for attempt in range(MAX_LLM_ATTEMPTS):
-            prompt = user_prompt if attempt == 0 else build_retry_prompt(last_response)
-            raw_response = await self._llm.complete(SYSTEM_PROMPT, prompt)
-            last_response = raw_response
-            try:
-                cleaned = _strip_markdown_fences(raw_response)
-                data = json.loads(cleaned)
-                return ParsedResumeOutput.model_validate(data)
-            except (json.JSONDecodeError, ValidationError):
-                continue
-        return None
+        return await call_llm_for_json(
+            llm=self._llm,
+            system_prompt=SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+            validate=ParsedResumeOutput.model_validate,
+            build_retry_prompt=build_retry_prompt,
+            max_attempts=MAX_LLM_ATTEMPTS,
+        )
 
     async def _resolve_candidate(self, parsed: ParsedResumeOutput) -> uuid.UUID | None:
         if not parsed.email:

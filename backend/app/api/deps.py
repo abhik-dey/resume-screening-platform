@@ -13,6 +13,7 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.resume_parser.agent import ResumeParsingAgent
+from app.agents.skill_extractor.agent import SkillExtractionAgent
 from app.core.config import get_settings
 from app.core.security import TokenError, decode_access_token
 from app.domain.entities.user import User, UserRole
@@ -24,6 +25,10 @@ from app.infrastructure.repositories.sqlalchemy_audit_log_repository import SQLA
 from app.infrastructure.repositories.sqlalchemy_candidate_repository import SQLAlchemyCandidateRepository
 from app.infrastructure.repositories.sqlalchemy_job_repository import SQLAlchemyJobRepository
 from app.infrastructure.repositories.sqlalchemy_resume_repository import SQLAlchemyResumeRepository
+from app.infrastructure.repositories.sqlalchemy_resume_skill_repository import (
+    SQLAlchemyResumeSkillRepository,
+)
+from app.infrastructure.repositories.sqlalchemy_skill_repository import SQLAlchemySkillRepository
 from app.infrastructure.repositories.sqlalchemy_user_repository import SQLAlchemyUserRepository
 from app.infrastructure.storage.local_file_storage import LocalFileStorage
 from app.services.auth_service import AuthService
@@ -108,6 +113,36 @@ async def get_resume_parsing_agent(
         resume_repository=resume_repo,
         candidate_repository=candidate_repo,
         file_storage=storage,
+        llm_provider=llm,
+        model_name=model_name,
+    )
+
+
+async def get_skill_repository(db: AsyncSession = Depends(get_db)) -> SQLAlchemySkillRepository:
+    return SQLAlchemySkillRepository(db)
+
+
+async def get_resume_skill_repository(
+    db: AsyncSession = Depends(get_db),
+) -> SQLAlchemyResumeSkillRepository:
+    return SQLAlchemyResumeSkillRepository(db)
+
+
+async def get_skill_extraction_agent(
+    audit_repo: SQLAlchemyAuditLogRepository = Depends(get_audit_log_repository),
+    resume_repo: SQLAlchemyResumeRepository = Depends(get_resume_repository),
+    skill_repo: SQLAlchemySkillRepository = Depends(get_skill_repository),
+    resume_skill_repo: SQLAlchemyResumeSkillRepository = Depends(get_resume_skill_repository),
+    llm: LLMProvider = Depends(get_llm_provider_dependency),
+) -> SkillExtractionAgent:
+    model_name = (
+        settings.openai_model if settings.llm_provider == "openai" else settings.anthropic_model
+    )
+    return SkillExtractionAgent(
+        audit_log_repository=audit_repo,
+        resume_repository=resume_repo,
+        skill_repository=skill_repo,
+        resume_skill_repository=resume_skill_repo,
         llm_provider=llm,
         model_name=model_name,
     )
