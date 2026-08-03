@@ -106,6 +106,13 @@ class FakeScoreRepository(ScoreRepository):
             reverse=True,
         )
 
+    async def update_rank(self, score_id: uuid.UUID, rank: int) -> None:
+        for score in self._by_resume.values():
+            if score.id == score_id:
+                score.rank = rank
+                return
+        raise ValueError(f"score {score_id} not found")
+
 
 class FakeAuditLogRepository(AuditLogRepository):
     def __init__(self) -> None:

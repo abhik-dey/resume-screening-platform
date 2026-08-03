@@ -79,3 +79,10 @@ class SQLAlchemyScoreRepository(ScoreRepository):
             .order_by(ScoreModel.similarity_score.desc())
         )
         return [_to_entity(m) for m in result.scalars().all()]
+
+    async def update_rank(self, score_id: UUID, rank: int) -> None:
+        model = await self._session.get(ScoreModel, score_id)
+        if model is None:
+            raise ValueError(f"Cannot update rank for score {score_id}: not found")
+        model.rank = rank
+        await self._session.commit()

@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.job_description.agent import JobDescriptionAgent
 from app.agents.matching.agent import MatchingAgent
+from app.agents.ranking.agent import RankingAgent
 from app.agents.resume_parser.agent import ResumeParsingAgent
 from app.agents.skill_extractor.agent import SkillExtractionAgent
 from app.core.config import get_settings
@@ -231,4 +232,22 @@ async def get_matching_agent(
         score_repository=score_repo,
         llm_provider=llm,
         model_name=model_name,
+    )
+
+
+async def get_ranking_agent(
+    audit_repo: SQLAlchemyAuditLogRepository = Depends(get_audit_log_repository),
+    job_repo: SQLAlchemyJobRepository = Depends(get_job_repository),
+    score_repo: SQLAlchemyScoreRepository = Depends(get_score_repository),
+    resume_repo: SQLAlchemyResumeRepository = Depends(get_resume_repository),
+    resume_skill_repo: SQLAlchemyResumeSkillRepository = Depends(get_resume_skill_repository),
+) -> RankingAgent:
+    # No LLM provider: ranking is deterministic arithmetic (see the agent's
+    # module docstring for why).
+    return RankingAgent(
+        audit_log_repository=audit_repo,
+        job_repository=job_repo,
+        score_repository=score_repo,
+        resume_repository=resume_repo,
+        resume_skill_repository=resume_skill_repo,
     )

@@ -20,3 +20,13 @@ class ScoreRepository(ABC):
     async def list_by_job(self, job_id: UUID) -> list[Score]:
         """Return all scores for a job, highest similarity first.
         (Used by the Ranking Agent in Phase 10.)"""
+
+    @abstractmethod
+    async def update_rank(self, score_id: UUID, rank: int) -> None:
+        """Set the rank on an existing score row.
+
+        Separate from `upsert` deliberately: `upsert` is owned by the
+        Matching Agent and must never touch rank, while rank is owned by
+        the Ranking Agent, which considers all candidates for a job
+        together. Keeping them apart makes it structurally impossible for
+        one agent to clobber the other's field."""

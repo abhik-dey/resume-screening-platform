@@ -196,3 +196,210 @@ async def test_viewer_cannot_analyze_job(client):
         f"/api/v1/jobs/{job_id}/analyze", headers={"Authorization": f"Bearer {viewer_token}"}
     )
     assert resp.status_code == 403
+
+
+MATCH_ANALYSIS_JSON = """{
+  "strengths": ["Strong Python background"],
+  "weaknesses": ["Limited cloud exposure"]
+}"""
+
+
+def _build_pdf(text: str) -> bytes:
+    import io
+
+    from reportlab.pdfgen import canvas
+
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer)
+    c.drawString(72, 720, text)
+    c.save()
+    return buffer.getvalue()
+
+
+async def _prepare_scored_job(client, token, required_skills=None, candidate_count=2):
+    """Create a job, then upload/parse/extract/match N resumes against it."""
+    job_resp = await client.post(
+        "/api/v1/jobs",
+        json={
+            "title": "Backend Engineer",
+            "description": "Build APIs.",
+            "required_skills": required_skills if required_skills is not None else ["Python", "SQL"],
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    job_id = job_resp.json()["id"]
+
+    resume_ids = []
+    for i in range(candidate_count):
+        upload_resp = await client.post(
+            f"/api/v1/jobs/{job_id}/resumes",
+            files={"file": (f"resume{i}.pdf", _build_pdf(f"Candidate {i} resume"), "application/pdf")},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        resume_id = upload_resp.json()["id"]
+        resume_ids.append(resume_id)
+        await client.post(
+            f"/api/v1/resumes/{resume_id}/parse", headers={"Authorization": f"Bearer {token}"}
+        )
+        await client.post(
+            f"/api/v1/resumes/{resume_id}/extract-skills", headers={"Authorization": f"Bearer {token}"}
+        )
+        app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+            [MATCH_ANALYSIS_JSON]
+        )
+        try:
+            await client.post(
+                f"/api/v1/resumes/{resume_id}/match", headers={"Authorization": f"Bearer {token}"}
+            )
+        finally:
+            app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+                [VALID_PARSED_RESUME_JSON]
+            )
+    return job_id, resume_ids
+
+
+async def test_rank_assigns_ranks_to_all_candidates(client):
+    token = await _register_and_login(client, "recruiter30@company.com")
+    job_id, resume_ids = await _prepare_scored_job(client, token, candidate_count=3)
+
+    resp = await client.post(
+        f"/api/v1/jobs/{job_id}/rank", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is True
+    assert body["total_candidates"] == 3
+    assert len(body["ranking"]) == 3
+    # All candidates here are identical, so competition ranking gives them
+    # all rank 1 rather than inventing an order.
+    assert all(c["rank"] == 1 for c in body["ranking"])
+
+
+async def test_rank_is_deterministic_across_calls(client):
+    token = await _register_and_login(client, "recruiter31@company.com")
+    job_id, _ = await _prepare_scored_job(client, token, candidate_count=3)
+
+    orderings = []
+    for _ in range(3):
+        resp = await client.post(
+            f"/api/v1/jobs/{job_id}/rank", headers={"Authorization": f"Bearer {token}"}
+        )
+        orderings.append([c["resume_id"] for c in resp.json()["ranking"]])
+
+    assert orderings[0] == orderings[1] == orderings[2]
+
+
+async def test_rank_with_custom_weights(client):
+    token = await _register_and_login(client, "recruiter32@company.com")
+    job_id, _ = await _prepare_scored_job(client, token, candidate_count=2)
+
+    resp = await client.post(
+        f"/api/v1/jobs/{job_id}/rank",
+        json={"weights": {"skills": 0.8, "experience": 0.1, "education": 0.1}},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["weights_applied"]["skills"] == 0.8
+
+
+async def test_rank_rejects_weights_that_do_not_sum_to_one(client):
+    token = await _register_and_login(client, "recruiter33@company.com")
+    job_id, _ = await _prepare_scored_job(client, token, candidate_count=1)
+
+    resp = await client.post(
+        f"/api/v1/jobs/{job_id}/rank",
+        json={"weights": {"skills": 0.5, "experience": 0.5, "education": 0.5}},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    # Caught by schema validation, so the recruiter gets a clear 422 rather
+    # than a vague agent failure.
+    assert resp.status_code == 422
+
+
+async def test_rank_rejects_negative_weights(client):
+    token = await _register_and_login(client, "recruiter34@company.com")
+    job_id, _ = await _prepare_scored_job(client, token, candidate_count=1)
+
+    resp = await client.post(
+        f"/api/v1/jobs/{job_id}/rank",
+        json={"weights": {"skills": 1.2, "experience": -0.2, "education": 0.0}},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 422
+
+
+async def test_rank_job_with_no_scored_candidates(client):
+    token = await _register_and_login(client, "recruiter35@company.com")
+    job_resp = await client.post(
+        "/api/v1/jobs",
+        json={"title": "Empty Job", "description": "No applicants yet."},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    job_id = job_resp.json()["id"]
+
+    resp = await client.post(
+        f"/api/v1/jobs/{job_id}/rank", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is True
+    assert body["total_candidates"] == 0
+    assert body["ranking"] == []
+
+
+async def test_rank_nonexistent_job_returns_404(client):
+    token = await _register_and_login(client, "recruiter36@company.com")
+    resp = await client.post(
+        "/api/v1/jobs/00000000-0000-0000-0000-000000000000/rank",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 404
+
+
+async def test_viewer_cannot_trigger_ranking(client):
+    admin_token = await _register_and_login(client, "admin20@company.com")
+    job_id, _ = await _prepare_scored_job(client, admin_token, candidate_count=1)
+    viewer_token = await _register_and_login(client, "viewer10@company.com", role="viewer")
+
+    resp = await client.post(
+        f"/api/v1/jobs/{job_id}/rank", headers={"Authorization": f"Bearer {viewer_token}"}
+    )
+    assert resp.status_code == 403
+
+
+async def test_get_ranking_returns_persisted_order(client):
+    token = await _register_and_login(client, "recruiter37@company.com")
+    job_id, _ = await _prepare_scored_job(client, token, candidate_count=2)
+    await client.post(f"/api/v1/jobs/{job_id}/rank", headers={"Authorization": f"Bearer {token}"})
+
+    resp = await client.get(
+        f"/api/v1/jobs/{job_id}/ranking", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 2
+    assert all(c["rank"] is not None for c in body)
+
+
+async def test_get_ranking_before_ranking_returns_empty(client):
+    token = await _register_and_login(client, "recruiter38@company.com")
+    job_id, _ = await _prepare_scored_job(client, token, candidate_count=1)
+
+    resp = await client.get(
+        f"/api/v1/jobs/{job_id}/ranking", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert resp.status_code == 200
+    assert resp.json() == []  # scored but not yet ranked
+
+
+async def test_viewer_can_read_ranking(client):
+    admin_token = await _register_and_login(client, "admin21@company.com")
+    job_id, _ = await _prepare_scored_job(client, admin_token, candidate_count=1)
+    await client.post(f"/api/v1/jobs/{job_id}/rank", headers={"Authorization": f"Bearer {admin_token}"})
+    viewer_token = await _register_and_login(client, "viewer11@company.com", role="viewer")
+
+    resp = await client.get(
+        f"/api/v1/jobs/{job_id}/ranking", headers={"Authorization": f"Bearer {viewer_token}"}
+    )
+    assert resp.status_code == 200  # read-only access is the viewer role's purpose

@@ -20,7 +20,10 @@ domain/skills, so it is fully unit-testable in isolation.
 import re
 from dataclasses import dataclass, field
 
-# --- Component weights (must sum to 1.0) ---
+# --- Default component weights (must sum to 1.0) ---
+# Exposed as module constants for backwards compatibility and as the
+# defaults of ScoringWeights below. Phase 10 allows recruiters to override
+# these per ranking run, so nothing here is hardcoded into the algorithm.
 SKILLS_WEIGHT = 0.60
 EXPERIENCE_WEIGHT = 0.25
 EDUCATION_WEIGHT = 0.15
@@ -28,6 +31,47 @@ EDUCATION_WEIGHT = 0.15
 # A required skill counts this many times more than a preferred one when
 # computing the skills component.
 REQUIRED_SKILL_MULTIPLIER = 3.0
+
+# Floating-point sums rarely land exactly on 1.0 (0.6 + 0.25 + 0.15 is
+# 0.9999999999999999 in IEEE 754), so weight validation uses a tolerance
+# rather than exact equality.
+_WEIGHT_SUM_TOLERANCE = 1e-6
+
+
+class InvalidWeightsError(ValueError):
+    """Raised when custom scoring weights are negative or don't sum to 1.0."""
+
+
+@dataclass(frozen=True)
+class ScoringWeights:
+    """Component weights for match scoring.
+
+    Frozen so a weights object can't be mutated after validation — a
+    half-modified weights object producing scores that don't sum correctly
+    would be a subtle and hard-to-trace bug.
+    """
+
+    skills: float = SKILLS_WEIGHT
+    experience: float = EXPERIENCE_WEIGHT
+    education: float = EDUCATION_WEIGHT
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("skills", self.skills),
+            ("experience", self.experience),
+            ("education", self.education),
+        ):
+            if value < 0:
+                raise InvalidWeightsError(f"Weight '{name}' cannot be negative (got {value})")
+        total = self.skills + self.experience + self.education
+        if abs(total - 1.0) > _WEIGHT_SUM_TOLERANCE:
+            raise InvalidWeightsError(
+                f"Weights must sum to 1.0 (got {total:.6f}: skills={self.skills}, "
+                f"experience={self.experience}, education={self.education})"
+            )
+
+
+DEFAULT_WEIGHTS = ScoringWeights()
 
 # Education levels ranked lowest to highest. Matched with WORD BOUNDARIES,
 # not naive substring containment: short aliases like "ma", "ba", "be" would
@@ -105,7 +149,10 @@ def _normalize_for_comparison(skill: str) -> str:
 
 
 def _score_skills(
-    candidate_skills: list[str], required_skills: list[str], preferred_skills: list[str]
+    candidate_skills: list[str],
+    required_skills: list[str],
+    preferred_skills: list[str],
+    weight: float,
 ) -> tuple[ComponentScore, list[str], list[str], list[str], list[str]]:
     """Weighted skill coverage. Required skills count REQUIRED_SKILL_MULTIPLIER
     times more than preferred ones."""
@@ -134,8 +181,8 @@ def _score_skills(
             ComponentScore(
                 name="skills",
                 raw_score=1.0,
-                weight=SKILLS_WEIGHT,
-                weighted_score=SKILLS_WEIGHT,
+                weight=weight,
+                weighted_score=weight,
                 detail="Job lists no skill requirements; skills component scored as fully met.",
             ),
             matched_required,
@@ -155,8 +202,8 @@ def _score_skills(
         ComponentScore(
             name="skills",
             raw_score=raw,
-            weight=SKILLS_WEIGHT,
-            weighted_score=raw * SKILLS_WEIGHT,
+            weight=weight,
+            weighted_score=raw * weight,
             detail=detail,
         ),
         matched_required,
@@ -166,13 +213,15 @@ def _score_skills(
     )
 
 
-def _score_experience(candidate_years: float | None, required_years: int | None) -> ComponentScore:
+def _score_experience(
+    candidate_years: float | None, required_years: int | None, weight: float
+) -> ComponentScore:
     if required_years is None or required_years <= 0:
         return ComponentScore(
             name="experience",
             raw_score=1.0,
-            weight=EXPERIENCE_WEIGHT,
-            weighted_score=EXPERIENCE_WEIGHT,
+            weight=weight,
+            weighted_score=weight,
             detail="Job states no minimum experience; component scored as fully met.",
         )
 
@@ -180,7 +229,7 @@ def _score_experience(candidate_years: float | None, required_years: int | None)
         return ComponentScore(
             name="experience",
             raw_score=0.0,
-            weight=EXPERIENCE_WEIGHT,
+            weight=weight,
             weighted_score=0.0,
             detail=f"Job requires {required_years} years; none could be determined from the resume.",
         )
@@ -192,8 +241,8 @@ def _score_experience(candidate_years: float | None, required_years: int | None)
     return ComponentScore(
         name="experience",
         raw_score=raw,
-        weight=EXPERIENCE_WEIGHT,
-        weighted_score=raw * EXPERIENCE_WEIGHT,
+        weight=weight,
+        weighted_score=raw * weight,
         detail=f"Candidate has ~{candidate_years:.1f} years against a {required_years}-year requirement.",
     )
 
@@ -220,14 +269,16 @@ def education_level(text: str | None) -> int:
     return best
 
 
-def _score_education(candidate_education: str | None, required_education: str | None) -> ComponentScore:
+def _score_education(
+    candidate_education: str | None, required_education: str | None, weight: float
+) -> ComponentScore:
     required_level = education_level(required_education)
     if required_level == 0:
         return ComponentScore(
             name="education",
             raw_score=1.0,
-            weight=EDUCATION_WEIGHT,
-            weighted_score=EDUCATION_WEIGHT,
+            weight=weight,
+            weighted_score=weight,
             detail="Job states no education requirement; component scored as fully met.",
         )
 
@@ -236,7 +287,7 @@ def _score_education(candidate_education: str | None, required_education: str | 
         return ComponentScore(
             name="education",
             raw_score=0.0,
-            weight=EDUCATION_WEIGHT,
+            weight=weight,
             weighted_score=0.0,
             detail=f"Job requires {required_education!r}; no education could be determined from the resume.",
         )
@@ -245,8 +296,8 @@ def _score_education(candidate_education: str | None, required_education: str | 
     return ComponentScore(
         name="education",
         raw_score=raw,
-        weight=EDUCATION_WEIGHT,
-        weighted_score=raw * EDUCATION_WEIGHT,
+        weight=weight,
+        weighted_score=raw * weight,
         detail=(
             f"Candidate education level {candidate_level} against required level {required_level} "
             f"({required_education!r})."
@@ -262,17 +313,28 @@ def compute_match_score(
     required_years_experience: int | None,
     candidate_education: str | None,
     required_education: str | None,
+    weights: ScoringWeights | None = None,
 ) -> MatchResult:
     """Compute a deterministic, explainable match score.
 
     Pure function: no I/O, no LLM, no randomness. The same arguments always
     produce the same result, which is what makes the score defensible.
+
+    `weights` defaults to the standard 60/25/15 split. Phase 10 lets
+    recruiters supply their own per ranking run — a specialist role might
+    weight skills at 80%, a junior role might weight education higher.
     """
+    active_weights = weights or DEFAULT_WEIGHTS
+
     skills_component, matched_req, matched_pref, missing_req, missing_pref = _score_skills(
-        candidate_skills, required_skills, preferred_skills
+        candidate_skills, required_skills, preferred_skills, active_weights.skills
     )
-    experience_component = _score_experience(candidate_years_experience, required_years_experience)
-    education_component = _score_education(candidate_education, required_education)
+    experience_component = _score_experience(
+        candidate_years_experience, required_years_experience, active_weights.experience
+    )
+    education_component = _score_education(
+        candidate_education, required_education, active_weights.education
+    )
 
     components = [skills_component, experience_component, education_component]
     overall = sum(c.weighted_score for c in components)
