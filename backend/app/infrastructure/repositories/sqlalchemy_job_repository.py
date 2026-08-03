@@ -53,6 +53,23 @@ class SQLAlchemyJobRepository(JobRepository):
         model = await self._session.get(JobModel, job_id)
         return _to_entity(model) if model else None
 
+    async def update(self, job: Job) -> Job:
+        model = await self._session.get(JobModel, job.id)
+        if model is None:
+            raise ValueError(f"Cannot update job {job.id}: not found")
+        model.title = job.title
+        model.description = job.description
+        model.required_skills = job.required_skills
+        model.preferred_skills = job.preferred_skills
+        model.min_experience_years = job.min_experience_years
+        model.education_requirement = job.education_requirement
+        model.responsibilities = job.responsibilities
+        model.keywords = job.keywords
+        model.status = job.status
+        await self._session.commit()
+        await self._session.refresh(model)
+        return _to_entity(model)
+
     async def list_all(self, skip: int = 0, limit: int = 50) -> list[Job]:
         result = await self._session.execute(
             select(JobModel).order_by(JobModel.created_at.desc()).offset(skip).limit(limit)

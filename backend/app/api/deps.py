@@ -12,6 +12,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.job_description.agent import JobDescriptionAgent
 from app.agents.resume_parser.agent import ResumeParsingAgent
 from app.agents.skill_extractor.agent import SkillExtractionAgent
 from app.core.config import get_settings
@@ -143,6 +144,22 @@ async def get_skill_extraction_agent(
         resume_repository=resume_repo,
         skill_repository=skill_repo,
         resume_skill_repository=resume_skill_repo,
+        llm_provider=llm,
+        model_name=model_name,
+    )
+
+
+async def get_job_description_agent(
+    audit_repo: SQLAlchemyAuditLogRepository = Depends(get_audit_log_repository),
+    job_repo: SQLAlchemyJobRepository = Depends(get_job_repository),
+    llm: LLMProvider = Depends(get_llm_provider_dependency),
+) -> JobDescriptionAgent:
+    model_name = (
+        settings.openai_model if settings.llm_provider == "openai" else settings.anthropic_model
+    )
+    return JobDescriptionAgent(
+        audit_log_repository=audit_repo,
+        job_repository=job_repo,
         llm_provider=llm,
         model_name=model_name,
     )

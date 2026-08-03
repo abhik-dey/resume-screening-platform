@@ -11,6 +11,11 @@ class JobRepository(ABC):
         """Persist a new job and return the stored representation."""
 
     @abstractmethod
+    async def update(self, job: Job) -> Job:
+        """Persist changes to an existing job (e.g. after description
+        analysis) and return the updated representation."""
+
+    @abstractmethod
     async def get_by_id(self, job_id: UUID) -> Job | None:
         """Return the job with this id, or None if no such job exists."""
 

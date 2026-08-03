@@ -32,6 +32,10 @@ class FakeJobRepository(JobRepository):
         self._jobs[job.id] = job
         return job
 
+    async def update(self, job: Job) -> Job:
+        self._jobs[job.id] = job
+        return job
+
     async def get_by_id(self, job_id: uuid.UUID) -> Job | None:
         return self._jobs.get(job_id)
 
