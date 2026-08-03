@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.health import router as health_router
 from app.api.v1.endpoints.auth import router as auth_router
 from app.api.v1.endpoints.jobs import router as jobs_router
+from app.api.v1.endpoints.reports import router as reports_router
 from app.api.v1.endpoints.resumes import router as resumes_router
 from app.core.config import get_settings
 
@@ -34,6 +35,7 @@ app.include_router(health_router, prefix="/api")
 app.include_router(auth_router)
 app.include_router(jobs_router)
 app.include_router(resumes_router)
+app.include_router(reports_router)
 
 
 @app.get("/")

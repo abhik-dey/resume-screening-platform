@@ -5,19 +5,24 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.agents.job_description.agent import JobDescriptionAgent
 from app.agents.ranking.agent import RankingAgent
+from app.agents.report.agent import ReportGeneratorAgent
 from app.api.deps import (
     get_current_user,
     get_job_description_agent,
     get_job_service,
     get_ranking_agent,
+    get_report_generator_agent,
+    get_report_repository,
     get_resume_repository,
     get_score_repository,
     require_roles,
 )
 from app.api.v1.schemas.job import JobAnalysisResult, JobCreateRequest, JobResponse
 from app.api.v1.schemas.ranking import RankedCandidateResponse, RankingResult, RankRequest
+from app.api.v1.schemas.report import ReportGenerationResult, ReportResponse
 from app.domain.entities.job import Job
 from app.domain.entities.user import User, UserRole
+from app.domain.interfaces.report_repository import ReportRepository
 from app.domain.interfaces.resume_repository import ResumeRepository
 from app.domain.interfaces.score_repository import ScoreRepository
 from app.services.job_service import JobService
@@ -201,3 +206,57 @@ async def get_ranking(
             )
         )
     return candidates
+
+
+@router.post("/{job_id}/report", response_model=ReportGenerationResult)
+async def generate_report(
+    job_id: UUID,
+    current_user: User = Depends(require_roles(UserRole.RECRUITER, UserRole.ADMIN)),
+    job_service: JobService = Depends(get_job_service),
+    report_agent: ReportGeneratorAgent = Depends(get_report_generator_agent),
+    report_repo: ReportRepository = Depends(get_report_repository),
+) -> ReportGenerationResult:
+    """Generate a recruiter-facing PDF report for this job.
+
+    Aggregates already-computed results — scores, rankings, and
+    recommendations — into a single document. Requires at least one scored
+    candidate. The PDF carries the advisory notice on every page.
+    """
+    job = await job_service.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Job {job_id} not found")
+
+    result = await report_agent.generate(
+        job_id, generated_by=current_user.id, generated_by_email=current_user.email
+    )
+    output = result.output or {}
+
+    report = None
+    if result.success and output.get("report_id"):
+        report = await report_repo.get_by_id(UUID(output["report_id"]))
+
+    return ReportGenerationResult(
+        success=result.success,
+        reasoning=result.reasoning,
+        report=ReportResponse.model_validate(report) if report else None,
+        total_candidates=output.get("total_candidates", 0),
+        average_score=output.get("average_score", 0.0),
+        recommendation_counts=output.get("recommendation_counts", {}),
+        summary_generation_failed=output.get("summary_generation_failed", False),
+    )
+
+
+@router.get("/{job_id}/reports", response_model=list[ReportResponse])
+async def list_reports(
+    job_id: UUID,
+    current_user: User = Depends(get_current_user),
+    job_service: JobService = Depends(get_job_service),
+    report_repo: ReportRepository = Depends(get_report_repository),
+) -> list[ReportResponse]:
+    """List every report generated for this job, most recent first."""
+    job = await job_service.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Job {job_id} not found")
+
+    reports = await report_repo.list_by_job(job_id)
+    return [ReportResponse.model_validate(r) for r in reports]

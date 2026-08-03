@@ -403,3 +403,178 @@ async def test_viewer_can_read_ranking(client):
         f"/api/v1/jobs/{job_id}/ranking", headers={"Authorization": f"Bearer {viewer_token}"}
     )
     assert resp.status_code == 200  # read-only access is the viewer role's purpose
+
+
+REPORT_SUMMARY_JSON = '{"summary": "Candidates screened for this backend role."}'
+FEEDBACK_JSON = """{
+  "summary": "Solid candidate.",
+  "strengths": ["Python"],
+  "weaknesses": [],
+  "risk_factors": [],
+  "improvement_suggestions": ["Explore infrastructure tooling"]
+}"""
+
+
+async def _prepare_job_with_full_pipeline(client, token, candidate_count=2):
+    """Run the complete pipeline so a report has real data to aggregate."""
+    job_id, resume_ids = await _prepare_scored_job(client, token, candidate_count=candidate_count)
+    await client.post(f"/api/v1/jobs/{job_id}/rank", headers={"Authorization": f"Bearer {token}"})
+
+    app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+        [FEEDBACK_JSON]
+    )
+    try:
+        for resume_id in resume_ids:
+            await client.post(
+                f"/api/v1/resumes/{resume_id}/feedback", headers={"Authorization": f"Bearer {token}"}
+            )
+    finally:
+        app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+            [VALID_PARSED_RESUME_JSON]
+        )
+    return job_id, resume_ids
+
+
+async def test_generate_report_success(client):
+    token = await _register_and_login(client, "recruiter60@company.com")
+    job_id, _ = await _prepare_job_with_full_pipeline(client, token)
+
+    app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+        [REPORT_SUMMARY_JSON]
+    )
+    try:
+        resp = await client.post(
+            f"/api/v1/jobs/{job_id}/report", headers={"Authorization": f"Bearer {token}"}
+        )
+    finally:
+        app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+            [VALID_PARSED_RESUME_JSON]
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is True
+    assert body["total_candidates"] == 2
+    assert body["report"]["id"]
+    # file_path is an internal storage detail and must not leak.
+    assert "file_path" not in body["report"]
+
+
+async def test_download_report_returns_a_real_pdf(client):
+    token = await _register_and_login(client, "recruiter61@company.com")
+    job_id, _ = await _prepare_job_with_full_pipeline(client, token)
+
+    app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+        [REPORT_SUMMARY_JSON]
+    )
+    try:
+        gen_resp = await client.post(
+            f"/api/v1/jobs/{job_id}/report", headers={"Authorization": f"Bearer {token}"}
+        )
+    finally:
+        app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+            [VALID_PARSED_RESUME_JSON]
+        )
+    report_id = gen_resp.json()["report"]["id"]
+
+    dl_resp = await client.get(
+        f"/api/v1/reports/{report_id}/download", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert dl_resp.status_code == 200
+    assert dl_resp.headers["content-type"] == "application/pdf"
+    assert dl_resp.content[:4] == b"%PDF"
+    assert len(dl_resp.content) > 1000
+
+
+async def test_report_for_job_without_scores_is_a_handled_failure(client):
+    token = await _register_and_login(client, "recruiter62@company.com")
+    job_resp = await client.post(
+        "/api/v1/jobs",
+        json={"title": "Empty Role", "description": "No applicants."},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    job_id = job_resp.json()["id"]
+
+    resp = await client.post(
+        f"/api/v1/jobs/{job_id}/report", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is False
+    assert "no scored candidates" in body["reasoning"].lower()
+
+
+async def test_report_nonexistent_job_returns_404(client):
+    token = await _register_and_login(client, "recruiter63@company.com")
+    resp = await client.post(
+        "/api/v1/jobs/00000000-0000-0000-0000-000000000000/report",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 404
+
+
+async def test_viewer_cannot_generate_report(client):
+    admin_token = await _register_and_login(client, "admin50@company.com")
+    job_id, _ = await _prepare_job_with_full_pipeline(client, admin_token, candidate_count=1)
+    viewer_token = await _register_and_login(client, "viewer40@company.com", role="viewer")
+
+    resp = await client.post(
+        f"/api/v1/jobs/{job_id}/report", headers={"Authorization": f"Bearer {viewer_token}"}
+    )
+    assert resp.status_code == 403
+
+
+async def test_viewer_can_download_report(client):
+    admin_token = await _register_and_login(client, "admin51@company.com")
+    job_id, _ = await _prepare_job_with_full_pipeline(client, admin_token, candidate_count=1)
+
+    app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+        [REPORT_SUMMARY_JSON]
+    )
+    try:
+        gen_resp = await client.post(
+            f"/api/v1/jobs/{job_id}/report", headers={"Authorization": f"Bearer {admin_token}"}
+        )
+    finally:
+        app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+            [VALID_PARSED_RESUME_JSON]
+        )
+    report_id = gen_resp.json()["report"]["id"]
+
+    viewer_token = await _register_and_login(client, "viewer41@company.com", role="viewer")
+    resp = await client.get(
+        f"/api/v1/reports/{report_id}/download", headers={"Authorization": f"Bearer {viewer_token}"}
+    )
+    assert resp.status_code == 200  # read-only access is the viewer role's purpose
+
+
+async def test_list_reports_for_job(client):
+    token = await _register_and_login(client, "recruiter64@company.com")
+    job_id, _ = await _prepare_job_with_full_pipeline(client, token, candidate_count=1)
+
+    app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+        [REPORT_SUMMARY_JSON]
+    )
+    try:
+        await client.post(f"/api/v1/jobs/{job_id}/report", headers={"Authorization": f"Bearer {token}"})
+        await client.post(f"/api/v1/jobs/{job_id}/report", headers={"Authorization": f"Bearer {token}"})
+    finally:
+        app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+            [VALID_PARSED_RESUME_JSON]
+        )
+
+    resp = await client.get(
+        f"/api/v1/jobs/{job_id}/reports", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert resp.status_code == 200
+    # Reports are point-in-time snapshots, so both are retained.
+    assert len(resp.json()) == 2
+
+
+async def test_download_nonexistent_report_returns_404(client):
+    token = await _register_and_login(client, "recruiter65@company.com")
+    resp = await client.get(
+        "/api/v1/reports/00000000-0000-0000-0000-000000000000/download",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 404

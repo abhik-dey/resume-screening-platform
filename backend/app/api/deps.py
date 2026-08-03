@@ -17,6 +17,7 @@ from app.agents.interview_question.agent import InterviewQuestionAgent
 from app.agents.job_description.agent import JobDescriptionAgent
 from app.agents.matching.agent import MatchingAgent
 from app.agents.ranking.agent import RankingAgent
+from app.agents.report.agent import ReportGeneratorAgent
 from app.agents.resume_parser.agent import ResumeParsingAgent
 from app.agents.skill_extractor.agent import SkillExtractionAgent
 from app.core.config import get_settings
@@ -33,6 +34,7 @@ from app.infrastructure.repositories.sqlalchemy_interview_question_repository im
     SQLAlchemyInterviewQuestionRepository,
 )
 from app.infrastructure.repositories.sqlalchemy_job_repository import SQLAlchemyJobRepository
+from app.infrastructure.repositories.sqlalchemy_report_repository import SQLAlchemyReportRepository
 from app.infrastructure.repositories.sqlalchemy_resume_repository import SQLAlchemyResumeRepository
 from app.infrastructure.repositories.sqlalchemy_resume_skill_repository import (
     SQLAlchemyResumeSkillRepository,
@@ -312,6 +314,38 @@ async def get_feedback_agent(
         job_repository=job_repo,
         score_repository=score_repo,
         feedback_repository=feedback_repo,
+        llm_provider=llm,
+        model_name=model_name,
+    )
+
+
+async def get_report_repository(db: AsyncSession = Depends(get_db)) -> SQLAlchemyReportRepository:
+    return SQLAlchemyReportRepository(db)
+
+
+async def get_report_generator_agent(
+    audit_repo: SQLAlchemyAuditLogRepository = Depends(get_audit_log_repository),
+    job_repo: SQLAlchemyJobRepository = Depends(get_job_repository),
+    score_repo: SQLAlchemyScoreRepository = Depends(get_score_repository),
+    resume_repo: SQLAlchemyResumeRepository = Depends(get_resume_repository),
+    candidate_repo: SQLAlchemyCandidateRepository = Depends(get_candidate_repository),
+    feedback_repo: SQLAlchemyFeedbackRepository = Depends(get_feedback_repository),
+    report_repo: SQLAlchemyReportRepository = Depends(get_report_repository),
+    storage: FileStorage = Depends(get_file_storage),
+    llm: LLMProvider = Depends(get_llm_provider_dependency),
+) -> ReportGeneratorAgent:
+    model_name = (
+        settings.openai_model if settings.llm_provider == "openai" else settings.anthropic_model
+    )
+    return ReportGeneratorAgent(
+        audit_log_repository=audit_repo,
+        job_repository=job_repo,
+        score_repository=score_repo,
+        resume_repository=resume_repo,
+        candidate_repository=candidate_repo,
+        feedback_repository=feedback_repo,
+        report_repository=report_repo,
+        file_storage=storage,
         llm_provider=llm,
         model_name=model_name,
     )
