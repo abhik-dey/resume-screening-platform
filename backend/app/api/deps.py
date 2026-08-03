@@ -12,6 +12,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.feedback.agent import FeedbackAgent
 from app.agents.interview_question.agent import InterviewQuestionAgent
 from app.agents.job_description.agent import JobDescriptionAgent
 from app.agents.matching.agent import MatchingAgent
@@ -27,6 +28,7 @@ from app.infrastructure.db.session import get_db
 from app.infrastructure.llm.factory import get_llm_provider
 from app.infrastructure.repositories.sqlalchemy_audit_log_repository import SQLAlchemyAuditLogRepository
 from app.infrastructure.repositories.sqlalchemy_candidate_repository import SQLAlchemyCandidateRepository
+from app.infrastructure.repositories.sqlalchemy_feedback_repository import SQLAlchemyFeedbackRepository
 from app.infrastructure.repositories.sqlalchemy_interview_question_repository import (
     SQLAlchemyInterviewQuestionRepository,
 )
@@ -282,6 +284,34 @@ async def get_interview_question_agent(
         job_repository=job_repo,
         score_repository=score_repo,
         interview_question_repository=question_repo,
+        llm_provider=llm,
+        model_name=model_name,
+    )
+
+
+async def get_feedback_repository(db: AsyncSession = Depends(get_db)) -> SQLAlchemyFeedbackRepository:
+    return SQLAlchemyFeedbackRepository(db)
+
+
+async def get_feedback_agent(
+    audit_repo: SQLAlchemyAuditLogRepository = Depends(get_audit_log_repository),
+    resume_repo: SQLAlchemyResumeRepository = Depends(get_resume_repository),
+    resume_skill_repo: SQLAlchemyResumeSkillRepository = Depends(get_resume_skill_repository),
+    job_repo: SQLAlchemyJobRepository = Depends(get_job_repository),
+    score_repo: SQLAlchemyScoreRepository = Depends(get_score_repository),
+    feedback_repo: SQLAlchemyFeedbackRepository = Depends(get_feedback_repository),
+    llm: LLMProvider = Depends(get_llm_provider_dependency),
+) -> FeedbackAgent:
+    model_name = (
+        settings.openai_model if settings.llm_provider == "openai" else settings.anthropic_model
+    )
+    return FeedbackAgent(
+        audit_log_repository=audit_repo,
+        resume_repository=resume_repo,
+        resume_skill_repository=resume_skill_repo,
+        job_repository=job_repo,
+        score_repository=score_repo,
+        feedback_repository=feedback_repo,
         llm_provider=llm,
         model_name=model_name,
     )

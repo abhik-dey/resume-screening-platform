@@ -4,12 +4,15 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from fastapi.responses import Response
 
+from app.agents.feedback.agent import FeedbackAgent
 from app.agents.interview_question.agent import InterviewQuestionAgent
 from app.agents.matching.agent import MatchingAgent
 from app.agents.resume_parser.agent import ResumeParsingAgent
 from app.agents.skill_extractor.agent import SkillExtractionAgent
 from app.api.deps import (
     get_current_user,
+    get_feedback_agent,
+    get_feedback_repository,
     get_interview_question_agent,
     get_interview_question_repository,
     get_matching_agent,
@@ -20,6 +23,7 @@ from app.api.deps import (
     get_skill_extraction_agent,
     require_roles,
 )
+from app.api.v1.schemas.feedback import FeedbackGenerationResult, FeedbackResponse
 from app.api.v1.schemas.interview_question import (
     InterviewQuestionGenerationResult,
     InterviewQuestionRequest,
@@ -30,6 +34,8 @@ from app.api.v1.schemas.score import MatchResultResponse, ScoreResponse
 from app.api.v1.schemas.skill import ResumeSkillResponse, SkillExtractionResult
 from app.domain.entities.resume import Resume
 from app.domain.entities.user import User, UserRole
+from app.domain.feedback.recommendation import ADVISORY_NOTICE
+from app.domain.interfaces.feedback_repository import FeedbackRepository
 from app.domain.interfaces.interview_question_repository import InterviewQuestionRepository
 from app.domain.interfaces.resume_skill_repository import ResumeSkillRepository
 from app.domain.interfaces.score_repository import ScoreRepository
@@ -297,3 +303,62 @@ async def list_interview_questions(
 
     questions = await question_repo.list_by_resume(resume_id)
     return [InterviewQuestionResponse.model_validate(q) for q in questions]
+
+
+@router.post("/api/v1/resumes/{resume_id}/feedback", response_model=FeedbackGenerationResult)
+async def generate_feedback(
+    resume_id: UUID,
+    current_user: User = Depends(require_roles(UserRole.RECRUITER, UserRole.ADMIN)),
+    resume_service: ResumeService = Depends(get_resume_service),
+    feedback_agent: FeedbackAgent = Depends(get_feedback_agent),
+    feedback_repo: FeedbackRepository = Depends(get_feedback_repository),
+) -> FeedbackGenerationResult:
+    """Generate a hiring recommendation and feedback narrative for a candidate.
+
+    The recommendation category is derived arithmetically from the match
+    score, not by an LLM — so it's reproducible and traceable to a specific
+    threshold. Requires that matching has already run.
+
+    This output is ADVISORY. It is a screening aid based solely on resume
+    contents and must be reviewed by a human recruiter.
+    """
+    try:
+        await resume_service.get_resume(resume_id)
+    except ResumeNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    result = await feedback_agent.generate(resume_id)
+    saved = await feedback_repo.get_by_resume_id(resume_id) if result.success else None
+
+    return FeedbackGenerationResult(
+        success=result.success,
+        reasoning=result.reasoning,
+        feedback=FeedbackResponse.model_validate(saved) if saved else None,
+        advisory_notice=ADVISORY_NOTICE,
+    )
+
+
+@router.get("/api/v1/resumes/{resume_id}/feedback", response_model=FeedbackGenerationResult)
+async def get_feedback(
+    resume_id: UUID,
+    current_user: User = Depends(get_current_user),
+    resume_service: ResumeService = Depends(get_resume_service),
+    feedback_repo: FeedbackRepository = Depends(get_feedback_repository),
+) -> FeedbackGenerationResult:
+    try:
+        await resume_service.get_resume(resume_id)
+    except ResumeNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    saved = await feedback_repo.get_by_resume_id(resume_id)
+    if saved is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No feedback generated for resume {resume_id} yet",
+        )
+    return FeedbackGenerationResult(
+        success=True,
+        reasoning="Previously generated feedback.",
+        feedback=FeedbackResponse.model_validate(saved),
+        advisory_notice=ADVISORY_NOTICE,
+    )

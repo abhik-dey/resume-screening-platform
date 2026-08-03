@@ -755,3 +755,180 @@ async def test_question_count_out_of_range_rejected_by_schema(client):
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 422
+
+
+FEEDBACK_NARRATIVE_JSON = """{
+  "summary": "Capable Python developer with relevant backend experience.",
+  "strengths": ["Strong Python foundation"],
+  "weaknesses": ["Limited infrastructure exposure"],
+  "risk_factors": [],
+  "improvement_suggestions": ["Hands-on Kubernetes work would help for infra-heavy roles"]
+}"""
+
+
+async def _prepare_matched_for_feedback(client, token):
+    """Upload -> parse -> extract-skills -> match, ready for feedback."""
+    job_resp = await client.post(
+        "/api/v1/jobs",
+        json={
+            "title": "Backend Engineer",
+            "description": "Build APIs.",
+            "required_skills": ["Python", "SQL"],
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    job_id = job_resp.json()["id"]
+    upload_resp = await client.post(
+        f"/api/v1/jobs/{job_id}/resumes",
+        files={"file": ("resume.pdf", _build_real_pdf_bytes("Jane Doe resume"), "application/pdf")},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    resume_id = upload_resp.json()["id"]
+    await client.post(f"/api/v1/resumes/{resume_id}/parse", headers={"Authorization": f"Bearer {token}"})
+    await client.post(
+        f"/api/v1/resumes/{resume_id}/extract-skills", headers={"Authorization": f"Bearer {token}"}
+    )
+    app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+        ['{"strengths": ["Python"], "weaknesses": []}']
+    )
+    try:
+        await client.post(
+            f"/api/v1/resumes/{resume_id}/match", headers={"Authorization": f"Bearer {token}"}
+        )
+    finally:
+        _restore_llm()
+    return job_id, resume_id
+
+
+async def test_generate_feedback_success(client):
+    token = await _register_and_login(client, "recruiter50@company.com")
+    _, resume_id = await _prepare_matched_for_feedback(client, token)
+
+    app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+        [FEEDBACK_NARRATIVE_JSON]
+    )
+    try:
+        resp = await client.post(
+            f"/api/v1/resumes/{resume_id}/feedback", headers={"Authorization": f"Bearer {token}"}
+        )
+    finally:
+        _restore_llm()
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is True
+    # Perfect skill match on Python+SQL -> strong recommend.
+    assert body["feedback"]["recommendation"] == "strong_recommend"
+    assert body["feedback"]["threshold_rationale"]
+    assert body["feedback"]["summary"]
+
+
+async def test_feedback_response_always_carries_advisory_notice(client):
+    token = await _register_and_login(client, "recruiter51@company.com")
+    _, resume_id = await _prepare_matched_for_feedback(client, token)
+
+    app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+        [FEEDBACK_NARRATIVE_JSON]
+    )
+    try:
+        resp = await client.post(
+            f"/api/v1/resumes/{resume_id}/feedback", headers={"Authorization": f"Bearer {token}"}
+        )
+    finally:
+        _restore_llm()
+
+    # Required field, not an optional footnote — any consuming UI must
+    # handle it, which is the point.
+    assert "not a hiring decision" in resp.json()["advisory_notice"].lower()
+
+
+async def test_feedback_without_matching_is_a_handled_failure(client):
+    token = await _register_and_login(client, "recruiter52@company.com")
+    job_id = await _create_open_job(client, token)
+    upload_resp = await client.post(
+        f"/api/v1/jobs/{job_id}/resumes",
+        files={"file": ("resume.pdf", _build_real_pdf_bytes("content"), "application/pdf")},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    resume_id = upload_resp.json()["id"]
+    await client.post(f"/api/v1/resumes/{resume_id}/parse", headers={"Authorization": f"Bearer {token}"})
+
+    resp = await client.post(
+        f"/api/v1/resumes/{resume_id}/feedback", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is False
+    assert "match score" in body["reasoning"].lower()
+
+
+async def test_feedback_llm_failure_still_returns_recommendation(client):
+    token = await _register_and_login(client, "recruiter53@company.com")
+    _, resume_id = await _prepare_matched_for_feedback(client, token)
+
+    app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+        ["garbage", "still garbage"]
+    )
+    try:
+        resp = await client.post(
+            f"/api/v1/resumes/{resume_id}/feedback", headers={"Authorization": f"Bearer {token}"}
+        )
+    finally:
+        _restore_llm()
+
+    body = resp.json()
+    assert body["success"] is True
+    assert body["feedback"]["recommendation"] == "strong_recommend"
+    assert body["feedback"]["narrative_generation_failed"] is True
+    assert body["feedback"]["summary"] is None
+
+
+async def test_feedback_nonexistent_resume_returns_404(client):
+    token = await _register_and_login(client, "recruiter54@company.com")
+    resp = await client.post(
+        "/api/v1/resumes/00000000-0000-0000-0000-000000000000/feedback",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 404
+
+
+async def test_viewer_cannot_generate_feedback(client):
+    admin_token = await _register_and_login(client, "admin40@company.com")
+    _, resume_id = await _prepare_matched_for_feedback(client, admin_token)
+    viewer_token = await _register_and_login(client, "viewer30@company.com", role="viewer")
+
+    resp = await client.post(
+        f"/api/v1/resumes/{resume_id}/feedback", headers={"Authorization": f"Bearer {viewer_token}"}
+    )
+    assert resp.status_code == 403
+
+
+async def test_viewer_can_read_feedback(client):
+    admin_token = await _register_and_login(client, "admin41@company.com")
+    _, resume_id = await _prepare_matched_for_feedback(client, admin_token)
+    app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+        [FEEDBACK_NARRATIVE_JSON]
+    )
+    try:
+        await client.post(
+            f"/api/v1/resumes/{resume_id}/feedback", headers={"Authorization": f"Bearer {admin_token}"}
+        )
+    finally:
+        _restore_llm()
+
+    viewer_token = await _register_and_login(client, "viewer31@company.com", role="viewer")
+    resp = await client.get(
+        f"/api/v1/resumes/{resume_id}/feedback", headers={"Authorization": f"Bearer {viewer_token}"}
+    )
+    assert resp.status_code == 200
+    assert "not a hiring decision" in resp.json()["advisory_notice"].lower()
+
+
+async def test_get_feedback_before_generation_returns_404(client):
+    token = await _register_and_login(client, "recruiter55@company.com")
+    _, resume_id = await _prepare_matched_for_feedback(client, token)
+
+    resp = await client.get(
+        f"/api/v1/resumes/{resume_id}/feedback", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert resp.status_code == 404

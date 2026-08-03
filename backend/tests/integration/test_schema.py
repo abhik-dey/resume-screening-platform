@@ -50,7 +50,7 @@ async def test_all_expected_tables_are_registered(test_engine):
     expected = {
         "users", "recruiter_profiles", "jobs", "candidates", "resumes",
         "skills", "resume_skills", "scores", "reports", "audit_logs",
-        "interview_questions",
+        "interview_questions", "candidate_feedback",
     }
     assert expected.issubset(set(table_names))
 

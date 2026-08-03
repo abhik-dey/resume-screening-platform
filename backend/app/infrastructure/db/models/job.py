@@ -12,6 +12,7 @@ from app.infrastructure.db.base import Base
 from app.infrastructure.db.types import GUID, PORTABLE_JSON
 
 if TYPE_CHECKING:
+    from app.infrastructure.db.models.candidate_feedback import CandidateFeedbackModel
     from app.infrastructure.db.models.interview_question import InterviewQuestionModel
     from app.infrastructure.db.models.report import ReportModel
     from app.infrastructure.db.models.resume import ResumeModel
@@ -48,3 +49,4 @@ class JobModel(Base):
     scores: Mapped[list["ScoreModel"]] = relationship(back_populates="job")
     reports: Mapped[list["ReportModel"]] = relationship(back_populates="job")
     interview_questions: Mapped[list["InterviewQuestionModel"]] = relationship(back_populates="job")
+    feedback_entries: Mapped[list["CandidateFeedbackModel"]] = relationship(back_populates="job")
