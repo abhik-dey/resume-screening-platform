@@ -4,21 +4,26 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from fastapi.responses import Response
 
+from app.agents.matching.agent import MatchingAgent
 from app.agents.resume_parser.agent import ResumeParsingAgent
 from app.agents.skill_extractor.agent import SkillExtractionAgent
 from app.api.deps import (
     get_current_user,
+    get_matching_agent,
     get_resume_parsing_agent,
     get_resume_service,
     get_resume_skill_repository,
+    get_score_repository,
     get_skill_extraction_agent,
     require_roles,
 )
 from app.api.v1.schemas.resume import ResumeParseResult, ResumeResponse
+from app.api.v1.schemas.score import MatchResultResponse, ScoreResponse
 from app.api.v1.schemas.skill import ResumeSkillResponse, SkillExtractionResult
 from app.domain.entities.resume import Resume
 from app.domain.entities.user import User, UserRole
 from app.domain.interfaces.resume_skill_repository import ResumeSkillRepository
+from app.domain.interfaces.score_repository import ScoreRepository
 from app.domain.validation.resume_file import ResumeValidationError
 from app.services.resume_service import (
     JobNotFoundError,
@@ -171,3 +176,58 @@ async def list_resume_skills(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
     return await resume_skill_repo.list_by_resume(resume_id)
+
+
+@router.post("/api/v1/resumes/{resume_id}/match", response_model=MatchResultResponse)
+async def match_resume(
+    resume_id: UUID,
+    current_user: User = Depends(require_roles(UserRole.RECRUITER, UserRole.ADMIN)),
+    resume_service: ResumeService = Depends(get_resume_service),
+    matching_agent: MatchingAgent = Depends(get_matching_agent),
+    score_repo: ScoreRepository = Depends(get_score_repository),
+) -> MatchResultResponse:
+    """Score this resume against the job it was uploaded for.
+
+    The numeric score is computed deterministically — running this twice on
+    unchanged data produces an identical score. `breakdown` shows exactly
+    how it was derived. Strengths/weaknesses come from an LLM and may be
+    empty if that call failed; the score is unaffected either way.
+    """
+    try:
+        await resume_service.get_resume(resume_id)
+    except ResumeNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    result = await matching_agent.match(resume_id)
+    output = result.output or {}
+    score = await score_repo.get_by_resume_id(resume_id)
+
+    return MatchResultResponse(
+        success=result.success,
+        reasoning=result.reasoning,
+        score=ScoreResponse.model_validate(score) if score else None,
+        breakdown=output.get("breakdown", {}),
+        explanation=output.get("explanation", ""),
+        qualitative_analysis_failed=output.get("qualitative_analysis_failed", False),
+    )
+
+
+@router.get("/api/v1/resumes/{resume_id}/score", response_model=ScoreResponse)
+async def get_resume_score(
+    resume_id: UUID,
+    current_user: User = Depends(get_current_user),
+    resume_service: ResumeService = Depends(get_resume_service),
+    score_repo: ScoreRepository = Depends(get_score_repository),
+) -> ScoreResponse:
+    try:
+        await resume_service.get_resume(resume_id)
+    except ResumeNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    score = await score_repo.get_by_resume_id(resume_id)
+    if score is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Resume {resume_id} has not been matched yet — run POST /resumes/{resume_id}/match first",
+        )
+    return ScoreResponse.model_validate(score)

@@ -13,6 +13,7 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.job_description.agent import JobDescriptionAgent
+from app.agents.matching.agent import MatchingAgent
 from app.agents.resume_parser.agent import ResumeParsingAgent
 from app.agents.skill_extractor.agent import SkillExtractionAgent
 from app.core.config import get_settings
@@ -29,6 +30,7 @@ from app.infrastructure.repositories.sqlalchemy_resume_repository import SQLAlch
 from app.infrastructure.repositories.sqlalchemy_resume_skill_repository import (
     SQLAlchemyResumeSkillRepository,
 )
+from app.infrastructure.repositories.sqlalchemy_score_repository import SQLAlchemyScoreRepository
 from app.infrastructure.repositories.sqlalchemy_skill_repository import SQLAlchemySkillRepository
 from app.infrastructure.repositories.sqlalchemy_user_repository import SQLAlchemyUserRepository
 from app.infrastructure.storage.local_file_storage import LocalFileStorage
@@ -204,3 +206,29 @@ def require_roles(*allowed_roles: UserRole):
         return current_user
 
     return _check
+
+
+async def get_score_repository(db: AsyncSession = Depends(get_db)) -> SQLAlchemyScoreRepository:
+    return SQLAlchemyScoreRepository(db)
+
+
+async def get_matching_agent(
+    audit_repo: SQLAlchemyAuditLogRepository = Depends(get_audit_log_repository),
+    resume_repo: SQLAlchemyResumeRepository = Depends(get_resume_repository),
+    resume_skill_repo: SQLAlchemyResumeSkillRepository = Depends(get_resume_skill_repository),
+    job_repo: SQLAlchemyJobRepository = Depends(get_job_repository),
+    score_repo: SQLAlchemyScoreRepository = Depends(get_score_repository),
+    llm: LLMProvider = Depends(get_llm_provider_dependency),
+) -> MatchingAgent:
+    model_name = (
+        settings.openai_model if settings.llm_provider == "openai" else settings.anthropic_model
+    )
+    return MatchingAgent(
+        audit_log_repository=audit_repo,
+        resume_repository=resume_repo,
+        resume_skill_repository=resume_skill_repo,
+        job_repository=job_repo,
+        score_repository=score_repo,
+        llm_provider=llm,
+        model_name=model_name,
+    )

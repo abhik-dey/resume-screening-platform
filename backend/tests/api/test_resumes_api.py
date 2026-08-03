@@ -369,3 +369,205 @@ async def test_list_resume_skills_endpoint(client):
     names = {s["name"] for s in body}
     assert names == {"Python", "SQL"}
     assert all(s["confidence"] == 1.0 for s in body)
+
+
+MATCH_ANALYSIS_JSON = """{
+  "strengths": ["Strong Python background"],
+  "weaknesses": ["No cloud experience listed"]
+}"""
+
+
+async def _prepare_matched_resume(client, token, job_payload=None):
+    """Upload -> parse -> extract skills, leaving the resume ready to match."""
+    job_payload = job_payload or {
+        "title": "Backend Engineer",
+        "description": "Build APIs.",
+        "required_skills": ["Python", "SQL"],
+    }
+    job_resp = await client.post(
+        "/api/v1/jobs", json=job_payload, headers={"Authorization": f"Bearer {token}"}
+    )
+    job_id = job_resp.json()["id"]
+    real_pdf = _build_real_pdf_bytes("Jane Doe resume content")
+    upload_resp = await client.post(
+        f"/api/v1/jobs/{job_id}/resumes",
+        files={"file": ("resume.pdf", real_pdf, "application/pdf")},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    resume_id = upload_resp.json()["id"]
+    await client.post(f"/api/v1/resumes/{resume_id}/parse", headers={"Authorization": f"Bearer {token}"})
+    await client.post(
+        f"/api/v1/resumes/{resume_id}/extract-skills", headers={"Authorization": f"Bearer {token}"}
+    )
+    return job_id, resume_id
+
+
+async def test_match_resume_produces_explainable_score(client):
+    token = await _register_and_login(client, "recruiter17@company.com")
+    _, resume_id = await _prepare_matched_resume(client, token)
+
+    app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+        [MATCH_ANALYSIS_JSON]
+    )
+    try:
+        resp = await client.post(
+            f"/api/v1/resumes/{resume_id}/match", headers={"Authorization": f"Bearer {token}"}
+        )
+    finally:
+        app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+            [VALID_PARSED_RESUME_JSON]
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is True
+    assert body["score"]["similarity_score"] == 1.0  # Python + SQL both matched
+    assert set(body["score"]["skill_overlap"]) == {"Python", "SQL"}
+    # The breakdown must expose every component, not just a number.
+    assert len(body["breakdown"]["components"]) == 3
+    assert body["explanation"]
+
+
+async def test_match_is_deterministic_across_repeated_calls(client):
+    token = await _register_and_login(client, "recruiter18@company.com")
+    _, resume_id = await _prepare_matched_resume(client, token)
+
+    app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+        [MATCH_ANALYSIS_JSON]
+    )
+    try:
+        scores = []
+        for _ in range(3):
+            resp = await client.post(
+                f"/api/v1/resumes/{resume_id}/match", headers={"Authorization": f"Bearer {token}"}
+            )
+            scores.append(resp.json()["score"]["similarity_score"])
+    finally:
+        app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+            [VALID_PARSED_RESUME_JSON]
+        )
+
+    assert len(set(scores)) == 1  # identical every time
+
+
+async def test_match_reports_missing_required_skills(client):
+    token = await _register_and_login(client, "recruiter19@company.com")
+    _, resume_id = await _prepare_matched_resume(
+        client,
+        token,
+        job_payload={
+            "title": "DevOps Engineer",
+            "description": "Infra work.",
+            "required_skills": ["Python", "Kubernetes", "Terraform"],
+        },
+    )
+
+    app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+        [MATCH_ANALYSIS_JSON]
+    )
+    try:
+        resp = await client.post(
+            f"/api/v1/resumes/{resume_id}/match", headers={"Authorization": f"Bearer {token}"}
+        )
+    finally:
+        app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+            [VALID_PARSED_RESUME_JSON]
+        )
+
+    body = resp.json()
+    assert set(body["score"]["missing_skills"]) == {"Kubernetes", "Terraform"}
+    assert body["score"]["similarity_score"] < 1.0
+
+
+async def test_match_unparsed_resume_is_a_handled_failure(client):
+    token = await _register_and_login(client, "recruiter20@company.com")
+    job_id = await _create_open_job(client, token)
+    real_pdf = _build_real_pdf_bytes("Some content")
+    upload_resp = await client.post(
+        f"/api/v1/jobs/{job_id}/resumes",
+        files={"file": ("resume.pdf", real_pdf, "application/pdf")},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    resume_id = upload_resp.json()["id"]
+
+    resp = await client.post(
+        f"/api/v1/resumes/{resume_id}/match", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert resp.status_code == 200  # handled failure, not an HTTP error
+    assert resp.json()["success"] is False
+
+
+async def test_match_nonexistent_resume_returns_404(client):
+    token = await _register_and_login(client, "recruiter21@company.com")
+    resp = await client.post(
+        "/api/v1/resumes/00000000-0000-0000-0000-000000000000/match",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 404
+
+
+async def test_viewer_cannot_trigger_match(client):
+    admin_token = await _register_and_login(client, "admin14@company.com")
+    _, resume_id = await _prepare_matched_resume(client, admin_token)
+    viewer_token = await _register_and_login(client, "viewer7@company.com", role="viewer")
+
+    resp = await client.post(
+        f"/api/v1/resumes/{resume_id}/match", headers={"Authorization": f"Bearer {viewer_token}"}
+    )
+    assert resp.status_code == 403
+
+
+async def test_get_score_before_matching_returns_404(client):
+    token = await _register_and_login(client, "recruiter22@company.com")
+    _, resume_id = await _prepare_matched_resume(client, token)
+
+    resp = await client.get(
+        f"/api/v1/resumes/{resume_id}/score", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert resp.status_code == 404
+
+
+async def test_get_score_after_matching_succeeds(client):
+    token = await _register_and_login(client, "recruiter23@company.com")
+    _, resume_id = await _prepare_matched_resume(client, token)
+
+    app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+        [MATCH_ANALYSIS_JSON]
+    )
+    try:
+        await client.post(
+            f"/api/v1/resumes/{resume_id}/match", headers={"Authorization": f"Bearer {token}"}
+        )
+    finally:
+        app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+            [VALID_PARSED_RESUME_JSON]
+        )
+
+    resp = await client.get(
+        f"/api/v1/resumes/{resume_id}/score", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["resume_id"] == resume_id
+
+
+async def test_viewer_can_read_score(client):
+    admin_token = await _register_and_login(client, "admin15@company.com")
+    _, resume_id = await _prepare_matched_resume(client, admin_token)
+
+    app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+        [MATCH_ANALYSIS_JSON]
+    )
+    try:
+        await client.post(
+            f"/api/v1/resumes/{resume_id}/match", headers={"Authorization": f"Bearer {admin_token}"}
+        )
+    finally:
+        app.dependency_overrides[get_llm_provider_dependency] = lambda: ScriptedLLMProvider(
+            [VALID_PARSED_RESUME_JSON]
+        )
+
+    viewer_token = await _register_and_login(client, "viewer8@company.com", role="viewer")
+    resp = await client.get(
+        f"/api/v1/resumes/{resume_id}/score", headers={"Authorization": f"Bearer {viewer_token}"}
+    )
+    assert resp.status_code == 200  # read-only access is the viewer role's purpose
