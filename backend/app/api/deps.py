@@ -27,6 +27,7 @@ from app.domain.interfaces.embedding_provider import EmbeddingProvider
 from app.domain.interfaces.file_storage import FileStorage
 from app.domain.interfaces.llm_provider import LLMProvider
 from app.domain.interfaces.vector_store import VectorStore
+from app.domain.tools.registry import ToolRegistry
 from app.graph.pipeline import build_pipeline
 from app.infrastructure.db.session import get_db
 from app.infrastructure.embeddings.factory import get_embedding_provider
@@ -47,6 +48,14 @@ from app.infrastructure.repositories.sqlalchemy_score_repository import SQLAlche
 from app.infrastructure.repositories.sqlalchemy_skill_repository import SQLAlchemySkillRepository
 from app.infrastructure.repositories.sqlalchemy_user_repository import SQLAlchemyUserRepository
 from app.infrastructure.storage.local_file_storage import LocalFileStorage
+from app.infrastructure.tools.external_tools import (
+    CalendarAvailabilityTool,
+    EmailDraftTool,
+    FilesystemReadTool,
+    GitHubProfileTool,
+    LinkedInProfileTool,
+)
+from app.infrastructure.tools.search_tools import DatabaseSearchTool, ResumeSearchTool
 from app.infrastructure.vector_store.factory import get_vector_store
 from app.services.auth_service import AuthService
 from app.services.indexing_service import IndexingService
@@ -435,4 +444,42 @@ async def get_pipeline_service(
         job_repository=job_repo,
         ranking_agent=ranking_agent,
         report_agent=report_agent,
+    )
+
+
+async def get_tool_registry(
+    indexing: IndexingService = Depends(get_indexing_service),
+    resume_repo: SQLAlchemyResumeRepository = Depends(get_resume_repository),
+    candidate_repo: SQLAlchemyCandidateRepository = Depends(get_candidate_repository),
+    job_repo: SQLAlchemyJobRepository = Depends(get_job_repository),
+    score_repo: SQLAlchemyScoreRepository = Depends(get_score_repository),
+) -> ToolRegistry:
+    """Assemble the tool registry.
+
+    Built per request because several tools hold request-scoped repositories
+    (and therefore a request-scoped DB session). Registration is cheap — it
+    populates a dict — so this is the right trade against leaking a stale
+    session across requests.
+    """
+    return ToolRegistry(
+        [
+            ResumeSearchTool(
+                indexing_service=indexing,
+                resume_repository=resume_repo,
+                candidate_repository=candidate_repo,
+            ),
+            DatabaseSearchTool(
+                job_repository=job_repo,
+                candidate_repository=candidate_repo,
+                resume_repository=resume_repo,
+                score_repository=score_repo,
+            ),
+            GitHubProfileTool(
+                enabled=settings.github_tool_enabled, token=settings.github_token
+            ),
+            LinkedInProfileTool(),
+            CalendarAvailabilityTool(),
+            EmailDraftTool(),
+            FilesystemReadTool(sandbox_root=settings.tool_filesystem_root),
+        ]
     )

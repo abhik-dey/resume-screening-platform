@@ -16,6 +16,7 @@ from app.api.v1.endpoints.rag import router as rag_router
 from app.api.v1.endpoints.reports import router as reports_router
 from app.api.v1.endpoints.resumes import router as resumes_router
 from app.api.v1.endpoints.search import router as search_router
+from app.api.v1.endpoints.tools import router as tools_router
 from app.core.config import get_settings
 
 settings = get_settings()
@@ -42,6 +43,7 @@ app.include_router(reports_router)
 app.include_router(search_router)
 app.include_router(rag_router)
 app.include_router(pipeline_router)
+app.include_router(tools_router)
 
 
 @app.get("/")

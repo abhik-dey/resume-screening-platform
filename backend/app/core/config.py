@@ -95,6 +95,16 @@ class Settings(BaseSettings):
     # nothing breaks if Qdrant isn't running.
     vector_store_backend: str = Field(default="memory")
 
+    # --- MCP tools (Phase 17) ---
+    # GitHub is off by default: it makes real outbound requests, and the
+    # username can originate from LLM output influenced by resume content.
+    # Opt-in rather than silently reachable.
+    github_tool_enabled: bool = Field(default=False)
+    github_token: str = Field(default="")
+    # Sandbox root for the filesystem tool. Paths are resolved and checked
+    # for containment inside this directory; nothing outside is readable.
+    tool_filesystem_root: str = Field(default="/app/storage")
+
 
 @lru_cache
 def get_settings() -> Settings:
