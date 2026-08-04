@@ -50,6 +50,7 @@ from app.infrastructure.vector_store.factory import get_vector_store
 from app.services.auth_service import AuthService
 from app.services.indexing_service import IndexingService
 from app.services.job_service import JobService
+from app.services.rag_service import RAGService
 from app.services.resume_service import ResumeService
 
 settings = get_settings()
@@ -383,4 +384,20 @@ async def get_indexing_service(
         resume_repository=resume_repo,
         resume_skill_repository=resume_skill_repo,
         job_repository=job_repo,
+    )
+
+
+async def get_rag_service(
+    indexing: IndexingService = Depends(get_indexing_service),
+    resume_repo: SQLAlchemyResumeRepository = Depends(get_resume_repository),
+    resume_skill_repo: SQLAlchemyResumeSkillRepository = Depends(get_resume_skill_repository),
+    candidate_repo: SQLAlchemyCandidateRepository = Depends(get_candidate_repository),
+    llm: LLMProvider = Depends(get_llm_provider_dependency),
+) -> RAGService:
+    return RAGService(
+        indexing_service=indexing,
+        resume_repository=resume_repo,
+        resume_skill_repository=resume_skill_repo,
+        candidate_repository=candidate_repo,
+        llm_provider=llm,
     )
