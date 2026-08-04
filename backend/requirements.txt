@@ -13,6 +13,14 @@ pyjwt==2.9.0
 python-multipart==0.0.9
 email-validator==2.2.0
 aiofiles==24.1.0
+# httpx is pinned HERE (not only in requirements-dev.txt) because openai
+# and anthropic both depend on it transitively, and httpx 0.28 removed the
+# `proxies` argument that openai 1.51 still passes. Leaving it unpinned in
+# production meant tests (which install requirements-dev.txt with a pinned
+# httpx) passed while the production image resolved 0.28.1 and crashed at
+# runtime. Any transitive dependency that can break the build belongs in
+# the production pin list.
+httpx==0.27.2
 openai==1.51.0
 anthropic==0.36.1
 pypdf==5.0.1
