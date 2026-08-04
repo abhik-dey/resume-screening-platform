@@ -15,10 +15,17 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import StaticPool
 
 import app.infrastructure.db.models  # noqa: F401 -- registers every table with Base
-from app.api.deps import get_file_storage, get_llm_provider_dependency
+from app.api.deps import (
+    get_embedding_provider_dependency,
+    get_file_storage,
+    get_llm_provider_dependency,
+    get_vector_store_dependency,
+)
 from app.infrastructure.db.base import Base
 from app.infrastructure.db.session import get_db
+from app.infrastructure.embeddings.hash_embedding_provider import HashEmbeddingProvider
 from app.infrastructure.storage.local_file_storage import LocalFileStorage
+from app.infrastructure.vector_store.in_memory_vector_store import InMemoryVectorStore
 from app.main import app
 from tests.fakes import VALID_PARSED_RESUME_JSON, ScriptedLLMProvider
 
@@ -65,7 +72,18 @@ async def client(db_session, tmp_path) -> AsyncGenerator[AsyncClient, None]:
 
     app.dependency_overrides[get_db] = _override_get_db
     app.dependency_overrides[get_file_storage] = _override_get_file_storage
+    # A fresh vector store per test: the shared production instance would
+    # otherwise leak indexed vectors between test cases.
+    test_vector_store = InMemoryVectorStore()
+    # The deterministic local embedding provider, ALWAYS — never the real
+    # one. A test suite that calls a live embedding API is slow, costs money,
+    # fails offline, and breaks for anyone whose configured model differs
+    # from the default. Tests must not depend on external services.
+    test_embedding_provider = HashEmbeddingProvider()
+
     app.dependency_overrides[get_llm_provider_dependency] = _override_get_llm_provider
+    app.dependency_overrides[get_vector_store_dependency] = lambda: test_vector_store
+    app.dependency_overrides[get_embedding_provider_dependency] = lambda: test_embedding_provider
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac

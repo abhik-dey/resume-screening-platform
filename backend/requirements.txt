@@ -18,3 +18,4 @@ anthropic==0.36.1
 pypdf==5.0.1
 python-docx==1.1.2
 reportlab==4.2.5
+qdrant-client==1.12.0

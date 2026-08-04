@@ -23,9 +23,12 @@ from app.agents.skill_extractor.agent import SkillExtractionAgent
 from app.core.config import get_settings
 from app.core.security import TokenError, decode_access_token
 from app.domain.entities.user import User, UserRole
+from app.domain.interfaces.embedding_provider import EmbeddingProvider
 from app.domain.interfaces.file_storage import FileStorage
 from app.domain.interfaces.llm_provider import LLMProvider
+from app.domain.interfaces.vector_store import VectorStore
 from app.infrastructure.db.session import get_db
+from app.infrastructure.embeddings.factory import get_embedding_provider
 from app.infrastructure.llm.factory import get_llm_provider
 from app.infrastructure.repositories.sqlalchemy_audit_log_repository import SQLAlchemyAuditLogRepository
 from app.infrastructure.repositories.sqlalchemy_candidate_repository import SQLAlchemyCandidateRepository
@@ -43,7 +46,9 @@ from app.infrastructure.repositories.sqlalchemy_score_repository import SQLAlche
 from app.infrastructure.repositories.sqlalchemy_skill_repository import SQLAlchemySkillRepository
 from app.infrastructure.repositories.sqlalchemy_user_repository import SQLAlchemyUserRepository
 from app.infrastructure.storage.local_file_storage import LocalFileStorage
+from app.infrastructure.vector_store.factory import get_vector_store
 from app.services.auth_service import AuthService
+from app.services.indexing_service import IndexingService
 from app.services.job_service import JobService
 from app.services.resume_service import ResumeService
 
@@ -348,4 +353,34 @@ async def get_report_generator_agent(
         file_storage=storage,
         llm_provider=llm,
         model_name=model_name,
+    )
+
+
+# A single shared vector store instance. For the in-memory backend this
+# matters: a per-request instance would lose every indexed vector between
+# calls, making search silently return nothing.
+_vector_store = get_vector_store(settings)
+
+
+def get_embedding_provider_dependency() -> EmbeddingProvider:
+    return get_embedding_provider(settings)
+
+
+def get_vector_store_dependency() -> VectorStore:
+    return _vector_store
+
+
+async def get_indexing_service(
+    embeddings: EmbeddingProvider = Depends(get_embedding_provider_dependency),
+    store: VectorStore = Depends(get_vector_store_dependency),
+    resume_repo: SQLAlchemyResumeRepository = Depends(get_resume_repository),
+    resume_skill_repo: SQLAlchemyResumeSkillRepository = Depends(get_resume_skill_repository),
+    job_repo: SQLAlchemyJobRepository = Depends(get_job_repository),
+) -> IndexingService:
+    return IndexingService(
+        embedding_provider=embeddings,
+        vector_store=store,
+        resume_repository=resume_repo,
+        resume_skill_repository=resume_skill_repo,
+        job_repository=job_repo,
     )

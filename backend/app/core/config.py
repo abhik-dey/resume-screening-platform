@@ -79,6 +79,22 @@ class Settings(BaseSettings):
     anthropic_api_key: str = Field(default="")
     anthropic_model: str = Field(default="claude-sonnet-4-5")
 
+    # --- Vector search (Phase 14) ---
+    qdrant_url: str = Field(default="http://qdrant:6333")
+    # "local", "openai", or "auto". Defaults to "local" so the system runs
+    # end-to-end on a fresh clone with no API key and no network.
+    #
+    # Note that "auto" (openai when a key exists) is NOT the default: a
+    # chat API key doesn't imply the same provider's embedding model names
+    # are configured, and silently calling a live API with a mismatched
+    # model name produces confusing 404s rather than a clear failure.
+    embedding_provider: str = Field(default="local")
+    embedding_model: str = Field(default="text-embedding-3-small")
+    embedding_dimensions: int = Field(default=1536)
+    # "qdrant" or "memory". Memory is the default for local development so
+    # nothing breaks if Qdrant isn't running.
+    vector_store_backend: str = Field(default="memory")
+
 
 @lru_cache
 def get_settings() -> Settings:
