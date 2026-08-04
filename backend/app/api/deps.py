@@ -27,6 +27,7 @@ from app.domain.interfaces.embedding_provider import EmbeddingProvider
 from app.domain.interfaces.file_storage import FileStorage
 from app.domain.interfaces.llm_provider import LLMProvider
 from app.domain.interfaces.vector_store import VectorStore
+from app.graph.pipeline import build_pipeline
 from app.infrastructure.db.session import get_db
 from app.infrastructure.embeddings.factory import get_embedding_provider
 from app.infrastructure.llm.factory import get_llm_provider
@@ -50,6 +51,7 @@ from app.infrastructure.vector_store.factory import get_vector_store
 from app.services.auth_service import AuthService
 from app.services.indexing_service import IndexingService
 from app.services.job_service import JobService
+from app.services.pipeline_service import PipelineService
 from app.services.rag_service import RAGService
 from app.services.resume_service import ResumeService
 
@@ -400,4 +402,37 @@ async def get_rag_service(
         resume_skill_repository=resume_skill_repo,
         candidate_repository=candidate_repo,
         llm_provider=llm,
+    )
+
+
+async def get_pipeline_service(
+    parsing_agent: ResumeParsingAgent = Depends(get_resume_parsing_agent),
+    skill_agent: SkillExtractionAgent = Depends(get_skill_extraction_agent),
+    matching_agent: MatchingAgent = Depends(get_matching_agent),
+    question_agent: InterviewQuestionAgent = Depends(get_interview_question_agent),
+    feedback_agent: FeedbackAgent = Depends(get_feedback_agent),
+    indexing: IndexingService = Depends(get_indexing_service),
+    ranking_agent: RankingAgent = Depends(get_ranking_agent),
+    report_agent: ReportGeneratorAgent = Depends(get_report_generator_agent),
+    resume_repo: SQLAlchemyResumeRepository = Depends(get_resume_repository),
+    job_repo: SQLAlchemyJobRepository = Depends(get_job_repository),
+) -> PipelineService:
+    # The graph is compiled per request rather than once at startup, because
+    # its nodes close over request-scoped agents (which hold a request-scoped
+    # DB session). Compilation is cheap — it wires callables, it doesn't do
+    # any I/O — so this is the right trade against leaking a stale session.
+    pipeline = build_pipeline(
+        parsing_agent=parsing_agent,
+        skill_agent=skill_agent,
+        matching_agent=matching_agent,
+        question_agent=question_agent,
+        feedback_agent=feedback_agent,
+        indexing_service=indexing,
+    )
+    return PipelineService(
+        pipeline=pipeline,
+        resume_repository=resume_repo,
+        job_repository=job_repo,
+        ranking_agent=ranking_agent,
+        report_agent=report_agent,
     )
