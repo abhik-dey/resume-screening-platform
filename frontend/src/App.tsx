@@ -1,44 +1,44 @@
-import { useEffect, useState } from "react";
-import { fetchHealth, type HealthResponse } from "./api/health";
+import { Navigate, Route, Routes } from "react-router-dom";
+import { AuthProvider, useAuth } from "./auth/AuthContext";
+import { Layout } from "./components/Layout";
+import { Spinner } from "./components/ui";
+import { CandidatePage } from "./pages/CandidatePage";
+import { JobDetailPage } from "./pages/JobDetailPage";
+import { JobsPage } from "./pages/JobsPage";
+import { LoginPage } from "./pages/LoginPage";
+import { SearchPage } from "./pages/SearchPage";
 
-function StatusPill({ label, status }: { label: string; status: "ok" | "error" }) {
-  const color = status === "ok" ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800";
-  return (
-    <span className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-medium ${color}`}>
-      {label}: {status}
-    </span>
-  );
+function RequireAuth({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuth();
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Spinner label="Checking your session" />
+      </div>
+    );
+  }
+  return user ? <>{children}</> : <Navigate to="/login" replace />;
+}
+
+function RedirectIfAuthed({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuth();
+  if (loading) return null;
+  return user ? <Navigate to="/jobs" replace /> : <>{children}</>;
 }
 
 export default function App() {
-  const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    fetchHealth()
-      .then(setHealth)
-      .catch((err: Error) => setError(err.message));
-  }, []);
-
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center gap-6 p-8">
-      <h1 className="text-3xl font-bold text-slate-900">AI Resume Screening Platform</h1>
-      <p className="text-slate-500">Phase 2 — Environment smoke test</p>
-
-      {error && <p className="text-red-600">Could not reach backend: {error}</p>}
-
-      {health && (
-        <div className="flex flex-col items-center gap-3 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-          <p className="text-slate-700">
-            Overall status:{" "}
-            <span className="font-semibold">{health.status}</span>
-          </p>
-          <div className="flex gap-3">
-            <StatusPill label="PostgreSQL" status={health.postgres.status} />
-            <StatusPill label="Redis" status={health.redis.status} />
-          </div>
-        </div>
-      )}
-    </div>
+    <AuthProvider>
+      <Routes>
+        <Route path="/login" element={<RedirectIfAuthed><LoginPage /></RedirectIfAuthed>} />
+        <Route element={<RequireAuth><Layout /></RequireAuth>}>
+          <Route path="/jobs" element={<JobsPage />} />
+          <Route path="/jobs/:jobId" element={<JobDetailPage />} />
+          <Route path="/resumes/:resumeId" element={<CandidatePage />} />
+          <Route path="/search" element={<SearchPage />} />
+        </Route>
+        <Route path="*" element={<Navigate to="/jobs" replace />} />
+      </Routes>
+    </AuthProvider>
   );
 }

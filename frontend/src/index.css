@@ -1,3 +1,80 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ---------------------------------------------------------------------
+   Design tokens.
+
+   Direction: this product's identity is that it SHOWS ITS WORK — every
+   score decomposes, every recommendation cites a threshold. So the
+   palette is quiet and the one loud element is the score decomposition.
+
+   Amber (not green) is the scoring accent, deliberately: green reads as
+   "approved" and this system insists throughout that its output is
+   advisory, not decisive. Amber reads as "under review", which is the
+   honest signal.
+   --------------------------------------------------------------------- */
+:root {
+  --ink:          #16181d;   /* primary text, near-black with a cool cast */
+  --ink-soft:     #5a6270;   /* secondary text */
+  --ink-faint:    #8b93a1;   /* tertiary, labels */
+  --surface:      #ffffff;
+  --surface-sunk: #f5f6f8;   /* page background */
+  --line:         #e3e6ea;
+
+  --signal:       #b8730f;   /* amber — scoring emphasis, "under review" */
+  --signal-soft:  #fdf5e7;
+  --signal-line:  #f0d9a8;
+
+  --accent:       #2d4a6b;   /* deep slate blue — navigation, primary action */
+  --accent-soft:  #eef2f7;
+
+  --positive:     #2f6b4f;
+  --caution:      #9a5b1e;
+  --negative:     #a33a32;
+}
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--surface-sunk);
+  color: var(--ink);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Numbers and identifiers are set in mono throughout: this is a system
+   about arithmetic, and tabular figures make scores comparable down a
+   column rather than optically ragged. */
+.numeric {
+  font-family: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Eyebrow labels: wide tracking, small, uppercase. Used to label data
+   regions so the eye can skip to the section it wants. */
+.eyebrow {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+/* Keyboard focus must remain visible — several controls below restyle
+   their default outline. */
+:where(a, button, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
