@@ -9,6 +9,7 @@ makes our ORM models portable across both dialects.
 """
 from collections.abc import AsyncGenerator
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -88,3 +89,29 @@ async def client(db_session, tmp_path) -> AsyncGenerator[AsyncClient, None]:
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
     app.dependency_overrides.clear()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _disable_rate_limiting_for_tests():
+    """Turn off rate limiting for the entire test session.
+
+    The suite makes hundreds of requests through one ASGI client, all
+    sharing a single rate-limit key (unauthenticated requests key on IP,
+    which is identical for every test). That trips the limiter on the test
+    suite itself rather than on abuse, producing 429s that surface as
+    confusing KeyErrors when a login response has no access_token.
+
+    Rate limiting behavior is tested directly in
+    tests/unit/test_rate_limiter.py, where it can be exercised
+    deterministically instead of as a side effect of test volume.
+    """
+    from app.main import app
+
+    # Disable on the APPLICATION instance only, not on the middleware class.
+    # Patching the class would also neuter tests that construct their own
+    # app to exercise the limiter directly (tests/unit/test_rate_limiter.py).
+    for middleware in app.user_middleware:
+        if "RateLimit" in str(middleware.cls):
+            middleware.kwargs["enabled"] = False
+    app.middleware_stack = app.build_middleware_stack()
+    yield

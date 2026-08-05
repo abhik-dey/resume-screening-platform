@@ -1,14 +1,19 @@
 """Tool listing and invocation endpoints."""
+import uuid
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.api.deps import get_current_user, get_tool_registry
+from app.api.deps import get_audit_log_repository, get_current_user, get_tool_registry
 from app.api.v1.schemas.tools import (
     ToolDescription,
     ToolInvokeRequest,
     ToolInvokeResponse,
     ToolListResponse,
 )
+from app.domain.entities.audit_log import AuditLog
 from app.domain.entities.user import User
+from app.domain.interfaces.audit_log_repository import AuditLogRepository
 from app.domain.tools.registry import (
     ToolNotFoundError,
     ToolPermissionError,
@@ -40,6 +45,7 @@ async def invoke_tool(
     payload: ToolInvokeRequest | None = None,
     current_user: User = Depends(get_current_user),
     registry: ToolRegistry = Depends(get_tool_registry),
+    audit_repo: AuditLogRepository = Depends(get_audit_log_repository),
 ) -> ToolInvokeResponse:
     """Invoke a tool by name.
 
@@ -58,6 +64,24 @@ async def invoke_tool(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ToolValidationError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    # PHASE 19 FIX for the gap flagged in Phase 17: agent runs were
+    # audit-logged but tool invocations weren't, which is inconsistent —
+    # a tool that reads candidate data or drafts an email is at least as
+    # worth recording as an agent run.
+    await audit_repo.create(
+        AuditLog(
+            id=uuid.uuid4(),
+            agent_name=f"tool:{tool_name}",
+            input_ref=f"user:{current_user.id}",
+            # Params, not results: results can be large, and the params are
+            # what answer "what did someone ask this tool to do?"
+            output={"params": params, "success": result.success},
+            reasoning=result.error or result.notice or "Tool invoked successfully.",
+            model_used="none (tool invocation)",
+            created_at=datetime.now(timezone.utc),
+        )
+    )
 
     return ToolInvokeResponse(
         tool=tool_name,

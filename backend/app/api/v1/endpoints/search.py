@@ -17,6 +17,7 @@ from app.domain.interfaces.candidate_repository import CandidateRepository
 from app.domain.interfaces.embedding_provider import EmbeddingProvider
 from app.domain.interfaces.resume_repository import ResumeRepository
 from app.domain.interfaces.vector_store import VectorSearchResult
+from app.infrastructure.embeddings.factory import EmbeddingConfigurationError
 from app.services.indexing_service import IndexingError, IndexingService
 
 router = APIRouter(tags=["search"])
@@ -64,6 +65,23 @@ async def index_resume(
         result = await indexing.index_resume(resume_id)
     except IndexingError as exc:
         return IndexResult(success=False, reasoning=str(exc))
+    except EmbeddingConfigurationError as exc:
+        # PHASE 19 FIX for the gap flagged in Phase 15: a misconfigured
+        # embedding provider produced an opaque 500, and diagnosing it meant
+        # reading container logs. A configuration error is the operator's to
+        # fix, so say so.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Embedding provider misconfigured: {exc}",
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Embedding call failed ({type(exc).__name__}): {exc}. Check EMBEDDING_PROVIDER, "
+                "EMBEDDING_MODEL, and EMBEDDING_DIMENSIONS — model names are provider-specific."
+            ),
+        ) from exc
     return IndexResult(
         success=True,
         reasoning=(
@@ -85,6 +103,19 @@ async def index_job(
         result = await indexing.index_job(job_id)
     except IndexingError as exc:
         return IndexResult(success=False, reasoning=str(exc))
+    except EmbeddingConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Embedding provider misconfigured: {exc}",
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Embedding call failed ({type(exc).__name__}): {exc}. Check EMBEDDING_PROVIDER, "
+                "EMBEDDING_MODEL, and EMBEDDING_DIMENSIONS — model names are provider-specific."
+            ),
+        ) from exc
     return IndexResult(
         success=True,
         reasoning=f"Indexed job {job_id} ({result['text_length']} chars).",
@@ -117,6 +148,14 @@ async def search_resumes(
         )
     except IndexingError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Search failed ({type(exc).__name__}): {exc}. Check the embedding provider "
+                "configuration — model names are provider-specific."
+            ),
+        ) from exc
 
     hits = await _enrich_hits(results, resume_repo, candidate_repo)
     return SearchResponse(

@@ -22,7 +22,12 @@ from app.core.config import get_settings
 from app.core.observability.logging_config import configure_logging, get_logger
 from app.core.observability.metrics import render_metrics
 from app.core.observability.middleware import RequestContextMiddleware
+from app.core.observability.security_middleware import (
+    RateLimitMiddleware,
+    SecurityHeadersMiddleware,
+)
 from app.core.observability.tracing import configure_tracing
+from app.infrastructure.security.rate_limiter import RateLimiter
 
 settings = get_settings()
 
@@ -40,8 +45,23 @@ app = FastAPI(
     description="Multi-agent AI resume screening platform.",
 )
 
-# Added before CORS so it wraps outermost: a request rejected by CORS
-# should still get an ID and appear in metrics.
+# Starlette applies middleware in REVERSE registration order, so the
+# last-registered runs outermost. RequestContextMiddleware is registered
+# last so every request — including ones rejected by rate limiting — gets
+# an ID and appears in metrics.
+if settings.security_headers_enabled:
+    app.add_middleware(SecurityHeadersMiddleware)
+
+_rate_limiter = RateLimiter(redis_url=settings.redis_url)
+app.add_middleware(
+    RateLimitMiddleware,
+    limiter=_rate_limiter,
+    default_limit=settings.rate_limit_default,
+    expensive_limit=settings.rate_limit_expensive,
+    window_seconds=settings.rate_limit_window_seconds,
+    enabled=settings.rate_limit_enabled,
+)
+
 app.add_middleware(RequestContextMiddleware)
 
 app.add_middleware(

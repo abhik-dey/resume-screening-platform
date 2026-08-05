@@ -116,6 +116,19 @@ class Settings(BaseSettings):
     tracing_enabled: bool = Field(default=False)
     otlp_endpoint: str = Field(default="")
 
+    # --- Security (Phase 19) ---
+    rate_limit_enabled: bool = Field(default=True)
+    # Generous for ordinary reads.
+    rate_limit_default: int = Field(default=120)
+    # Much stricter for LLM-backed endpoints: they're slow, cost money per
+    # call, and are the realistic abuse target.
+    rate_limit_expensive: int = Field(default=20)
+    rate_limit_window_seconds: int = Field(default=60)
+    security_headers_enabled: bool = Field(default=True)
+    # Scan untrusted text for prompt-injection patterns. Detection flags
+    # and logs; it never modifies the text.
+    injection_detection_enabled: bool = Field(default=True)
+
 
 @lru_cache
 def get_settings() -> Settings:

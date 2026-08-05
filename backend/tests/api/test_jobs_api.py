@@ -524,7 +524,18 @@ async def test_viewer_cannot_generate_report(client):
     assert resp.status_code == 403
 
 
-async def test_viewer_can_download_report(client):
+async def test_unrelated_viewer_cannot_download_a_report(client):
+    """UPDATED IN PHASE 19.
+
+    This test previously asserted that ANY viewer could download ANY
+    report, on the reasoning that "read-only access is the viewer role's
+    purpose". That was wrong, and it encoded the Phase 13 IDOR as expected
+    behavior: reports contain every candidate's name, score, and hiring
+    recommendation, and a viewer with no relationship to the job has no
+    business reading them.
+
+    "Viewer" means cannot modify — not can read everything.
+    """
     admin_token = await _register_and_login(client, "admin51@company.com")
     job_id, _ = await _prepare_job_with_full_pipeline(client, admin_token, candidate_count=1)
 
@@ -545,7 +556,8 @@ async def test_viewer_can_download_report(client):
     resp = await client.get(
         f"/api/v1/reports/{report_id}/download", headers={"Authorization": f"Bearer {viewer_token}"}
     )
-    assert resp.status_code == 200  # read-only access is the viewer role's purpose
+    # 404 rather than 403: a 403 would confirm the report ID is valid.
+    assert resp.status_code == 404
 
 
 async def test_list_reports_for_job(client):
