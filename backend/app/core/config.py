@@ -105,6 +105,17 @@ class Settings(BaseSettings):
     # for containment inside this directory; nothing outside is readable.
     tool_filesystem_root: str = Field(default="/app/storage")
 
+    # --- Observability (Phase 18) ---
+    log_level: str = Field(default="INFO")
+    # JSON in production (searchable/aggregatable); plain text locally,
+    # where JSON is harder to read.
+    log_json: bool = Field(default=True)
+    metrics_enabled: bool = Field(default=True)
+    # Tracing off by default: console-exported spans are very verbose and
+    # would drown the structured logs during development.
+    tracing_enabled: bool = Field(default=False)
+    otlp_endpoint: str = Field(default="")
+
 
 @lru_cache
 def get_settings() -> Settings:

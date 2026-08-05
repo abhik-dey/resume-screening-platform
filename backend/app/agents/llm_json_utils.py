@@ -8,12 +8,17 @@ the same pattern is the signal to extract, not speculation about a
 pattern that might repeat.
 """
 import json
+import time
 from collections.abc import Callable
 from typing import TypeVar
 
 from pydantic import ValidationError
 
+from app.core.observability.logging_config import get_logger
+from app.core.observability.metrics import record_llm_call, record_llm_retry
 from app.domain.interfaces.llm_provider import LLMProvider
+
+logger = get_logger(__name__)
 
 T = TypeVar("T")
 
@@ -43,15 +48,46 @@ async def call_llm_for_json(
     to `max_attempts` times total, feeding the previous bad response back
     via `build_retry_prompt` on subsequent attempts. Returns None if every
     attempt fails — callers decide what "no valid output" means for them."""
+    # Instrumented here because this is the single path every structured
+    # LLM call takes — a rising retry rate is the earliest signal that a
+    # provider or prompt is degrading, and it's otherwise invisible.
+    provider_name = type(llm).__name__
     last_response = ""
+
     for attempt in range(max_attempts):
         prompt = user_prompt if attempt == 0 else build_retry_prompt(last_response)
-        raw_response = await llm.complete(system_prompt, prompt)
+        started = time.perf_counter()
+        try:
+            raw_response = await llm.complete(system_prompt, prompt)
+        except Exception:
+            record_llm_call(provider_name, "error", time.perf_counter() - started)
+            raise
+
+        duration = time.perf_counter() - started
         last_response = raw_response
+
         try:
             cleaned = strip_markdown_fences(raw_response)
             data = json.loads(cleaned)
-            return validate(data)
-        except (json.JSONDecodeError, ValidationError, ValueError):
+            result = validate(data)
+        except json.JSONDecodeError:
+            record_llm_call(provider_name, "malformed", duration)
+            record_llm_retry("malformed_json")
+            logger.warning(
+                "LLM returned malformed JSON",
+                extra={"provider": provider_name, "attempt": attempt + 1},
+            )
             continue
+        except (ValidationError, ValueError):
+            record_llm_call(provider_name, "malformed", duration)
+            record_llm_retry("validation_error")
+            logger.warning(
+                "LLM output failed schema validation",
+                extra={"provider": provider_name, "attempt": attempt + 1},
+            )
+            continue
+
+        record_llm_call(provider_name, "success", duration)
+        return result
+
     return None
