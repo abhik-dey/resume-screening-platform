@@ -1,0 +1,45 @@
+# Database migration as a Job, run before rolling out a new backend image.
+#
+# Deliberately NOT an initContainer on the backend Deployment: with 3
+# replicas, an initContainer means three pods racing to run migrations
+# simultaneously. Alembic takes a lock so it wouldn't corrupt anything,
+# but two pods would block waiting, and a failed migration would crash-loop
+# every replica rather than failing once, visibly.
+#
+#   kubectl apply -f 10-migration-job.yaml
+#   kubectl wait --for=condition=complete job/db-migrate -n resume-screening
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-migrate
+  namespace: resume-screening
+spec:
+  # Retry a couple of times for transient database unavailability, but not
+  # indefinitely — a genuinely broken migration should fail loudly.
+  backoffLimit: 3
+  # Clean up an hour after finishing so completed Jobs don't accumulate.
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      name: db-migrate
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+      containers:
+        - name: migrate
+          image: resume-screening-backend:latest
+          imagePullPolicy: IfNotPresent
+          command: ["alembic", "upgrade", "head"]
+          envFrom:
+            - configMapRef: {name: backend-config}
+            - secretRef: {name: backend-secrets}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {memory: "128Mi", cpu: "100m"}
+            limits: {memory: "512Mi", cpu: "500m"}

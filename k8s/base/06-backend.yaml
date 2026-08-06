@@ -1,0 +1,174 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: resume-screening
+  labels:
+    app: backend
+spec:
+  selector:
+    app: backend
+  ports:
+    - port: 8000
+      targetPort: 8000
+      name: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: resume-screening
+  labels:
+    app: backend
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: backend
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Never drop below the current replica count during a rollout, and
+      # add at most one new pod at a time — a deploy shouldn't reduce
+      # capacity while it's happening.
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: backend
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: backend
+          image: resume-screening-backend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+              name: http
+          envFrom:
+            - configMapRef: {name: backend-config}
+            - secretRef: {name: backend-secrets}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false  # storage dir must be writable
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: storage
+              mountPath: /app/storage/resumes
+          resources:
+            # Requests drive scheduling; limits cap the blast radius of a
+            # runaway pod. Memory limit is generous because PDF parsing
+            # and embedding batches spike.
+            requests: {memory: "256Mi", cpu: "200m"}
+            limits: {memory: "1Gi", cpu: "1000m"}
+
+          # THREE probes doing three different jobs.
+          #
+          # startupProbe covers slow boot (DB connection, model client
+          # setup) WITHOUT forcing a permanently permissive liveness
+          # threshold. Without it you'd have to set failureThreshold high
+          # on liveness forever, which means a genuinely wedged pod takes
+          # minutes to be restarted.
+          startupProbe:
+            httpGet: {path: /api/health, port: 8000}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 24     # up to 2 minutes to start
+          # readiness removes the pod from Service endpoints without
+          # restarting it — correct when a dependency is briefly slow.
+          readinessProbe:
+            httpGet: {path: /api/health, port: 8000}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # liveness restarts a wedged process. Deliberately more tolerant
+          # than readiness: restarting on transient dependency slowness
+          # turns a degradation into an outage.
+          livenessProbe:
+            httpGet: {path: /api/health, port: 8000}
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 5
+          lifecycle:
+            preStop:
+              # Brief pause so the pod is removed from endpoints before
+              # the process starts shutting down; otherwise in-flight
+              # requests get connection-reset instead of a clean drain.
+              exec: {command: ["sh", "-c", "sleep 5"]}
+      # LLM-backed requests legitimately run for minutes. A short grace
+      # period would kill a screening run mid-flight.
+      terminationGracePeriodSeconds: 60
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: resume-storage
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: resume-storage
+  namespace: resume-screening
+spec:
+  # ReadWriteMany because multiple backend replicas mount it. NOTE: many
+  # default storage classes only support ReadWriteOnce, which would pin
+  # every replica to one node. Production should use object storage via
+  # the Phase 5 FileStorage interface instead — the abstraction exists
+  # precisely so this can change without touching application code.
+  accessModes: ["ReadWriteMany"]
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: backend-pdb
+  namespace: resume-screening
+spec:
+  # Keeps the service up during voluntary disruptions like node drains.
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: backend
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: backend-hpa
+  namespace: resume-screening
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: backend
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: 70}
+    - type: Resource
+      resource:
+        name: memory
+        target: {type: Utilization, averageUtilization: 80}
+  behavior:
+    scaleDown:
+      # Slow scale-down: this workload is bursty (a recruiter screens 50
+      # resumes, then nothing for an hour), and rapid scale-down would
+      # thrash. Scaling up is cheap; flapping is not.
+      stabilizationWindowSeconds: 300
+    scaleUp:
+      stabilizationWindowSeconds: 60

@@ -1,0 +1,94 @@
+# Postgres as a StatefulSet, not a Deployment.
+#
+# A Deployment gives pods random names and no guaranteed volume affinity.
+# Postgres needs stable identity and a PVC that follows it across
+# rescheduling — a rolled Deployment could otherwise start a second pod
+# against the same volume, which is data corruption rather than downtime.
+#
+# NOTE FOR PRODUCTION: running your own Postgres in-cluster means owning
+# backups, failover, and upgrades. A managed database is usually the right
+# call; this exists so the stack is self-contained.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: resume-screening
+spec:
+  # Headless: StatefulSet pods get stable DNS names rather than being
+  # load-balanced, which is what a database client needs.
+  clusterIP: None
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+      name: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: resume-screening
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999      # the postgres user in the official image
+        fsGroup: 999        # so the mounted PVC is writable
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+              name: postgres
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef: {name: backend-secrets, key: POSTGRES_USER}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: backend-secrets, key: POSTGRES_PASSWORD}
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef: {name: backend-config, key: POSTGRES_DB}
+            # The official image refuses to initialise into a non-empty
+            # directory, and a mounted PVC contains lost+found.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests: {memory: "256Mi", cpu: "100m"}
+            limits: {memory: "1Gi", cpu: "1000m"}
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U $POSTGRES_USER"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U $POSTGRES_USER"]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            # More tolerant than readiness: a database under load can be
+            # briefly unready without being wedged, and restarting it would
+            # turn a slowdown into an outage.
+            failureThreshold: 6
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi

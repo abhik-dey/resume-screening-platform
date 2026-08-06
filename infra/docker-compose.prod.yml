@@ -65,6 +65,11 @@ services:
     build:
       context: ../backend
       dockerfile: Dockerfile.prod
+    # Pinned explicitly. Without this, Compose derives the tag from the
+    # project name (resume-screening-platform-prod-backend), which would
+    # not match what the Kubernetes manifests reference — so an image
+    # built here couldn't be loaded into a cluster without retagging.
+    image: resume-screening-backend:latest
     restart: always
     env_file: [../backend/.env.prod]
     environment:
@@ -95,6 +100,8 @@ services:
         # so this can't be changed at runtime. Relative path so the browser
         # calls the same origin and nginx routes it.
         VITE_API_BASE_URL: ""
+    # Matches the Kubernetes manifests — see the note on backend above.
+    image: resume-screening-frontend:latest
     restart: always
     depends_on: [backend]
     networks: [internal]

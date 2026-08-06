@@ -1,0 +1,89 @@
+# Network policies.
+#
+# NOTE: these require a CNI that enforces NetworkPolicy (Calico, Cilium,
+# Weave). On a CNI that ignores them — including some managed defaults —
+# they are silently inert. Worth verifying rather than assuming, because a
+# policy that does nothing looks identical to one that works.
+
+# Default deny for ingress in the namespace. Everything below is an
+# explicit exception, which is the right default: a service added later
+# gets no accidental exposure.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: resume-screening
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress"]
+---
+# Backend accepts traffic from the ingress controller and from monitoring.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-ingress
+  namespace: resume-screening
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8000
+    # THE PHASE 18 RESOLUTION, cluster-native. /metrics was left
+    # unauthenticated because Prometheus scrapers don't carry bearer
+    # tokens, on the explicit understanding that network policy would
+    # restrict it. This is that policy: only the monitoring namespace can
+    # reach the backend directly.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 8000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontend-ingress
+  namespace: resume-screening
+spec:
+  podSelector:
+    matchLabels:
+      app: frontend
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# Datastores accept connections only from the backend. Nothing else in the
+# namespace — or outside it — should be able to reach Postgres directly.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: datastore-ingress
+  namespace: resume-screening
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: ["postgres", "redis", "qdrant"]
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: backend

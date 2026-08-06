@@ -11,6 +11,9 @@ infra/.env
 !.env.example
 !.env.prod.example
 
+# Generated Kubernetes secrets — never committed
+k8s/secret.generated.yaml
+
 # Node
 node_modules/
 dist/

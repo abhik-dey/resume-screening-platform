@@ -1,0 +1,56 @@
+# Non-secret configuration.
+#
+# Split from Secrets deliberately: this file is safe to commit and review
+# in a pull request, which is where most config mistakes are caught.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: resume-screening
+data:
+  POSTGRES_HOST: "postgres"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "resume_screening"
+  REDIS_HOST: "redis"
+  REDIS_PORT: "6379"
+  QDRANT_URL: "http://qdrant:6333"
+
+  JWT_ALGORITHM: "HS256"
+  ACCESS_TOKEN_EXPIRE_MINUTES: "60"
+  # Same-origin behind the Ingress, so no cross-origin entry is needed.
+  CORS_ORIGINS: "[]"
+
+  LLM_PROVIDER: "openai"
+  OPENAI_MODEL: "gpt-4o-mini"
+  OPENAI_BASE_URL: ""
+  ANTHROPIC_MODEL: "claude-sonnet-4-5"
+
+  EMBEDDING_PROVIDER: "openai"
+  EMBEDDING_MODEL: "text-embedding-3-small"
+  EMBEDDING_DIMENSIONS: "1536"
+  VECTOR_STORE_BACKEND: "qdrant"
+
+  RESUME_STORAGE_DIR: "/app/storage/resumes"
+  MAX_RESUME_UPLOAD_SIZE_MB: "10"
+  TOOL_FILESYSTEM_ROOT: "/app/storage"
+
+  LOG_LEVEL: "INFO"
+  LOG_JSON: "true"
+  METRICS_ENABLED: "true"
+  TRACING_ENABLED: "false"
+  OTLP_ENDPOINT: ""
+
+  RATE_LIMIT_ENABLED: "true"
+  RATE_LIMIT_DEFAULT: "120"
+  RATE_LIMIT_EXPENSIVE: "20"
+  RATE_LIMIT_WINDOW_SECONDS: "60"
+  SECURITY_HEADERS_ENABLED: "true"
+  INJECTION_DETECTION_ENABLED: "true"
+  GITHUB_TOOL_ENABLED: "false"
+
+  # This app blocks on LLM calls rather than CPU, so the usual
+  # (2 x cores + 1) worker heuristic doesn't apply — provider rate limits
+  # matter more than core count. Kept low per pod since the HPA scales
+  # pod count instead.
+  GUNICORN_WORKERS: "2"
+  GUNICORN_TIMEOUT: "300"

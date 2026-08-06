@@ -1,0 +1,43 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: resume-screening
+  namespace: resume-screening
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "12m"
+    # LLM-backed endpoints run for minutes; the 60s default would sever a
+    # screening run and return 504 while the work continued server-side.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    # TLS via cert-manager. Requires cert-manager installed and a
+    # ClusterIssuer named letsencrypt-prod.
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    # PHASE 18 GAP, THIRD ENFORCEMENT POINT: /metrics and the API docs are
+    # blocked at the edge. The NetworkPolicy below restricts it at the
+    # network layer too — defense in depth, since an Ingress
+    # misconfiguration shouldn't expose operational endpoints.
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      location /metrics { deny all; return 404; }
+      location ~ ^/(docs|redoc|openapi.json) { deny all; return 404; }
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: ["screening.example.com"]
+      secretName: resume-screening-tls
+  rules:
+    - host: screening.example.com
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: backend
+                port: {number: 8000}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port: {number: 8080}

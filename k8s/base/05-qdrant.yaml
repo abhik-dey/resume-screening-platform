@@ -1,0 +1,76 @@
+# Qdrant as a StatefulSet: the vector index is data, and rebuilding it
+# means re-embedding every resume, which costs real money in API calls.
+apiVersion: v1
+kind: Service
+metadata:
+  name: qdrant
+  namespace: resume-screening
+spec:
+  clusterIP: None
+  selector:
+    app: qdrant
+  ports:
+    - port: 6333
+      targetPort: 6333
+      name: http
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: qdrant
+  namespace: resume-screening
+spec:
+  serviceName: qdrant
+  replicas: 1
+  selector:
+    matchLabels:
+      app: qdrant
+  template:
+    metadata:
+      labels:
+        app: qdrant
+    spec:
+      securityContext:
+        # The Qdrant image defaults to root. Pinning a non-root user brings
+        # it in line with every other workload here; fsGroup makes the
+        # mounted PVC writable by that user.
+        #
+        # VERIFY ON FIRST DEPLOY: if the pod CrashLoopBackOffs on a
+        # permission error, the image version in use expects a different
+        # uid — check `kubectl logs` before assuming the manifest is wrong.
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: qdrant
+          image: qdrant/qdrant:v1.12.1
+          ports:
+            - containerPort: 6333
+              name: http
+          volumeMounts:
+            - name: storage
+              mountPath: /qdrant/storage
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {memory: "256Mi", cpu: "100m"}
+            limits: {memory: "2Gi", cpu: "1000m"}
+          readinessProbe:
+            httpGet: {path: /readyz, port: 6333}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /livez, port: 6333}
+            initialDelaySeconds: 30
+            periodSeconds: 20
+  volumeClaimTemplates:
+    - metadata:
+        name: storage
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
