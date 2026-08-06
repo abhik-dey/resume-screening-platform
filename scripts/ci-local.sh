@@ -98,6 +98,13 @@ step "Docker"
 if [ "$MODE" = "fast" ]; then
   skip "docker checks" "fast mode"
 elif command -v docker > /dev/null 2>&1 && docker info > /dev/null 2>&1; then
+  # The dev stack needs backend/.env, which is gitignored. Create one from
+  # the template if it's absent, so this checks the compose file rather than
+  # just reporting a missing file.
+  if [ ! -f backend/.env ]; then
+    cp backend/.env.example backend/.env
+    echo "       (created backend/.env from the template)"
+  fi
   run "dev compose parses" docker compose -f infra/docker-compose.yml config -q
 
   # The Phase 21 check: Compose resolves ${VAR} from a .env beside the

@@ -42,8 +42,8 @@ jobs:
     name: Lint (backend)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -56,8 +56,8 @@ jobs:
     name: Lint (frontend)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -81,7 +81,7 @@ jobs:
     # ",") }}` is structurally valid YAML and a workflow-level parse error.
     # That exact mistake shipped once and only surfaced on push.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: actionlint
         uses: docker://rhysd/actionlint:latest
         with:
@@ -91,8 +91,8 @@ jobs:
     name: Validate Kubernetes manifests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - run: pip install kubernetes-validate pyyaml
@@ -131,8 +131,8 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -186,8 +186,8 @@ jobs:
     # This job installs ONLY the production requirements and exercises the
     # imports that broke.
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Install production requirements only
@@ -262,7 +262,7 @@ jobs:
     name: Build production images
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: docker/setup-buildx-action@v3
 
       - name: Build backend
@@ -329,10 +329,17 @@ jobs:
     # from a .env beside it — never from a service's env_file. The prod
     # stack failed to start on a missing POSTGRES_PASSWORD.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Dev compose parses
-        run: docker compose -f infra/docker-compose.yml config -q
+        # The dev stack declares `env_file: ../backend/.env`, which is
+        # gitignored (it holds real API keys) and therefore absent from a
+        # fresh checkout. Create it from the committed template first —
+        # otherwise this asserts nothing except that the file is missing.
+        run: |
+          cp backend/.env.example backend/.env
+          docker compose -f infra/docker-compose.yml config -q
+          echo "dev compose resolved"
 
       - name: Prod compose resolves with a filled env
         run: |
@@ -366,8 +373,8 @@ jobs:
     name: Security scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -381,7 +388,7 @@ jobs:
           pip install pip-audit
           pip-audit -r requirements.txt --desc
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: npm audit
