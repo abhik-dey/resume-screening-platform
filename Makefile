@@ -1,6 +1,7 @@
 .PHONY: up down logs ps backend-shell frontend-shell health clean \
 	prod-check prod-build prod-up prod-down prod-logs prod-ps prod-migrate prod-grafana \
-	k8s-validate k8s-secrets k8s-apply k8s-migrate k8s-status k8s-delete
+	k8s-validate k8s-secrets k8s-apply k8s-migrate k8s-status k8s-delete \
+	ci ci-fast
 
 COMPOSE = docker compose -f infra/docker-compose.yml
 
@@ -120,3 +121,13 @@ k8s-delete:
 	@echo "All candidate data and the vector index will be lost."
 	@read -p "Type the namespace name to confirm: " c && [ "$$c" = "$(K8S_NS)" ]
 	kubectl delete namespace $(K8S_NS)
+
+# --- CI (Phase 23) ---
+# Run the pipeline's checks locally. CI you can only trigger by pushing is
+# a slow feedback loop.
+
+ci:
+	./scripts/ci-local.sh
+
+ci-fast:
+	./scripts/ci-local.sh fast

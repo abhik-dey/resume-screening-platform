@@ -1,0 +1,128 @@
+# Continuous delivery.
+#
+# Publishes images and deploys. Deliberately gated on CI passing — a
+# pipeline that can deploy an untested commit is worse than no pipeline,
+# because it creates confidence without justification.
+
+name: CD
+
+on:
+  push:
+    tags: ["v*"]          # releases are tagged, not every commit to main
+  workflow_dispatch:       # plus manual dispatch for controlled rollouts
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        default: staging
+        type: choice
+        options: [staging, production]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository }}
+
+jobs:
+  # CI is re-run rather than assumed: a tag can point at a commit whose CI
+  # run has expired, been deleted, or never completed.
+  verify:
+    name: Verify before release
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    name: Publish images
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive tags
+        id: meta
+        # Tag with both the version and the commit SHA. The SHA tag is what
+        # makes a rollback unambiguous — "latest" and even a semver tag can
+        # be moved, a SHA cannot.
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          [ "$VERSION" = "$GITHUB_REF" ] && VERSION="manual-$(date +%Y%m%d-%H%M%S)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push backend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile.prod
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-backend:${{ steps.meta.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-backend:sha-${{ steps.meta.outputs.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile.prod
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-frontend:${{ steps.meta.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-frontend:sha-${{ steps.meta.outputs.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        run: |
+          {
+            echo "### Published"
+            echo "- version: \`${{ steps.meta.outputs.version }}\`"
+            echo "- sha: \`${{ steps.meta.outputs.sha }}\`"
+            echo ""
+            echo "Roll back by deploying the previous \`sha-\` tag."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Deploy to ${{ github.event.inputs.environment || 'staging' }}
+    needs: publish
+    runs-on: ubuntu-latest
+    # A GitHub environment can require manual approval and hold the
+    # deployment credentials. Production deploys should not be a side
+    # effect of pushing a tag.
+    environment: ${{ github.event.inputs.environment || 'staging' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deployment steps
+        # Left as documented commands rather than executing against a
+        # cluster that doesn't exist. Wiring this to a real cluster means
+        # adding KUBE_CONFIG to the environment's secrets and uncommenting.
+        run: |
+          cat <<'PLAN'
+          Deployment sequence:
+
+            1. kubectl apply -f k8s/base/
+            2. kubectl apply -f k8s/base/10-migration-job.yaml
+               kubectl wait --for=condition=complete job/db-migrate \
+                 -n resume-screening --timeout=300s
+            3. kubectl set image deployment/backend \
+                 backend=<registry>/<image>:<tag> -n resume-screening
+            4. kubectl rollout status deployment/backend \
+                 -n resume-screening --timeout=300s
+
+          Migrations run BEFORE the image change: the new code may depend
+          on a schema the old code doesn't have, and a failed migration
+          should stop the deploy rather than crash-loop new pods.
+
+          Rollback:
+            kubectl rollout undo deployment/backend -n resume-screening
+          PLAN

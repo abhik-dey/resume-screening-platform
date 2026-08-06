@@ -1,0 +1,388 @@
+# Continuous integration.
+#
+# Every job here exists because of a bug that actually occurred in this
+# project, not because a pipeline template suggested it:
+#
+#   prod-dependency-check  <- Phase 15: httpx pinned only in requirements-dev,
+#                             so production resolved an incompatible version
+#   test (real services)   <- Phase 19: no Redis locally meant the rate
+#                             limiter failed open and never engaged
+#   compose-config         <- Phase 21: ${VAR} interpolation reads a .env
+#                             beside the compose file, not a service env_file
+#   docker-build           <- Phase 22: Compose derives image tags from the
+#                             project name, diverging from the k8s manifests
+#
+# The pattern in all four: the local environment couldn't exercise the
+# thing that broke.
+
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  # Callable from the CD workflow, which re-runs CI before publishing
+  # rather than trusting that a tagged commit was ever verified.
+  workflow_call:
+
+# A new push supersedes an in-flight run on the same branch — no reason to
+# keep burning minutes on a commit nobody is waiting for.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "20"
+
+jobs:
+  # ---------------------------------------------------------------- lint
+  lint-backend:
+    name: Lint (backend)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install ruff==0.7.4
+      - name: ruff
+        working-directory: backend
+        run: ruff check app tests
+
+  lint-frontend:
+    name: Lint (frontend)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      # npm ci, not install: it fails if package.json and the lockfile
+      # disagree, which is itself a useful signal.
+      - run: npm ci
+        working-directory: frontend
+      - name: TypeScript
+        working-directory: frontend
+        run: npx tsc --noEmit
+      - name: Production build
+        working-directory: frontend
+        run: npm run build
+
+  validate-k8s:
+    name: Validate Kubernetes manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install kubernetes-validate pyyaml
+      # Schema validation plus assertions on the security properties the
+      # manifests claim — including that k8s image references match what
+      # compose builds (the Phase 22 bug).
+      - run: python3 k8s/validate.py
+
+  # ---------------------------------------------------------------- test
+  test:
+    name: Tests (real Postgres + Redis)
+    runs-on: ubuntu-latest
+    # PHASE 19 LESSON: the suite previously passed on a machine with no
+    # Redis, because the rate limiter fails open when Redis is unreachable.
+    # It was never exercised. Running against real services means a feature
+    # that silently no-ops without its dependency cannot pass.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: test_db
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+        working-directory: backend
+
+      - name: Confirm the services are actually reachable
+        # If a service silently isn't up, tests would pass for the wrong
+        # reason — precisely the Phase 19 failure. Fail loudly instead.
+        run: |
+          python3 -c "
+          import socket, sys
+          for name, port in (('postgres', 5432), ('redis', 6379)):
+              s = socket.socket()
+              s.settimeout(5)
+              try:
+                  s.connect(('localhost', port))
+                  print(f'{name}: reachable')
+              except OSError as exc:
+                  sys.exit(f'{name} NOT reachable on {port}: {exc}')
+              finally:
+                  s.close()
+          "
+
+      - name: pytest
+        working-directory: backend
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: test_db
+          REDIS_HOST: localhost
+          # Local providers so CI never calls a real LLM API: slow, costly,
+          # and flaky. Agent behavior is covered by scripted fakes.
+          EMBEDDING_PROVIDER: local
+          VECTOR_STORE_BACKEND: memory
+          LOG_JSON: "false"
+        run: pytest -q --tb=short
+
+  # ------------------------------------------- production dependency check
+  prod-dependency-check:
+    name: Production-only dependency resolution
+    runs-on: ubuntu-latest
+    # PHASE 15 LESSON: httpx was pinned in requirements-dev.txt only. Tests
+    # installed the dev file and got a compatible version; the production
+    # image installed requirements.txt alone and resolved httpx 0.28, which
+    # had removed an argument the openai client still passed. 588 tests
+    # passed against a build that couldn't construct an API client.
+    #
+    # This job installs ONLY the production requirements and exercises the
+    # imports that broke.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install production requirements only
+        working-directory: backend
+        run: pip install -r requirements.txt
+
+      - name: Import the app and construct provider clients
+        working-directory: backend
+        env:
+          POSTGRES_HOST: localhost
+          REDIS_HOST: localhost
+        run: |
+          python3 -c "
+          from app.main import app
+          print(f'app imports: {len(app.routes)} routes')
+
+          # The exact construction that failed in Phase 15.
+          from openai import AsyncOpenAI
+          AsyncOpenAI(api_key='x', base_url='https://example.com/v1/')
+          print('OpenAI client constructs')
+
+          from anthropic import AsyncAnthropic
+          AsyncAnthropic(api_key='x')
+          print('Anthropic client constructs')
+
+          import httpx
+          print(f'httpx resolved to {httpx.__version__}')
+          "
+
+      - name: Report the resolved tree for the record
+        working-directory: backend
+        run: pip freeze
+
+  # -------------------------------------------------------------- docker
+  docker-build:
+    name: Build production images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build backend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile.prod
+          push: false
+          load: true
+          tags: resume-screening-backend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile.prod
+          push: false
+          load: true
+          tags: resume-screening-frontend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Containers must run as non-root
+        # Asserted rather than assumed: a base image change could silently
+        # revert this, and nothing else would notice.
+        run: |
+          for image in resume-screening-backend resume-screening-frontend; do
+            uid=$(docker run --rm --entrypoint sh "$image:latest" -c 'id -u')
+            echo "$image runs as uid $uid"
+            if [ "$uid" = "0" ]; then
+              echo "FAIL: $image runs as root"
+              exit 1
+            fi
+          done
+
+      - name: Backend image actually serves
+        # Building successfully and starting successfully are different
+        # claims. Check the second one.
+        run: |
+          docker run -d --name smoke -p 8000:8000 \
+            -e POSTGRES_HOST=localhost -e REDIS_HOST=localhost \
+            -e EMBEDDING_PROVIDER=local \
+            resume-screening-backend:latest
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8000/api/health >/dev/null 2>&1; then
+              echo "backend responded after ${i}s"
+              docker rm -f smoke
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "backend never became healthy:"
+          docker logs smoke
+          docker rm -f smoke
+          exit 1
+
+  compose-config:
+    name: Compose config resolves
+    runs-on: ubuntu-latest
+    # PHASE 21 LESSON: `env_file:` supplies variables inside a container,
+    # but ${VAR} interpolation in the compose file is resolved by Compose
+    # from a .env beside it — never from a service's env_file. The prod
+    # stack failed to start on a missing POSTGRES_PASSWORD.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dev compose parses
+        run: docker compose -f infra/docker-compose.yml config -q
+
+      - name: Prod compose resolves with a filled env
+        run: |
+          cp backend/.env.prod.example backend/.env.prod
+          sed -i 's/CHANGE_ME[A-Za-z_0-9]*/ci-placeholder-value/g' backend/.env.prod
+          # The symlink `make prod-check` creates — without it, Compose has
+          # nothing to interpolate ${POSTGRES_PASSWORD} from.
+          ln -sf ../backend/.env.prod infra/.env
+          docker compose -f infra/docker-compose.prod.yml config -q
+          echo "prod compose resolved"
+
+      - name: Image tags must match the k8s manifests
+        # PHASE 22 LESSON: Compose derives image names from the project
+        # name unless `image:` is pinned, silently diverging from what the
+        # manifests reference.
+        run: |
+          ln -sf ../backend/.env.prod infra/.env
+          docker compose -f infra/docker-compose.prod.yml config \
+            | python3 -c "
+          import sys, yaml
+          cfg = yaml.safe_load(sys.stdin)
+          for svc in ('backend', 'frontend'):
+              image = cfg['services'][svc].get('image')
+              expected = f'resume-screening-{svc}:latest'
+              assert image == expected, f'{svc}: expected {expected}, got {image}'
+              print(f'{svc}: {image}')
+          "
+
+  # ------------------------------------------------------------ security
+  security:
+    name: Security scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Python dependency audit
+        working-directory: backend
+        # Advisory rather than blocking: a transitive CVE with no available
+        # fix would otherwise block every unrelated PR. Reported, reviewed,
+        # not used as a gate.
+        continue-on-error: true
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt --desc
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: npm audit
+        working-directory: frontend
+        continue-on-error: true
+        run: npm audit --audit-level=high
+
+      - name: No committed secrets
+        # This one DOES block. A committed credential is in git history
+        # permanently, and rotating it afterwards doesn't remove it.
+        run: |
+          set +e
+          # Real secrets, not the CHANGE_ME/REPLACE_ME placeholders that
+          # are supposed to be in the templates.
+          matches=$(grep -rEn \
+            "(sk-[A-Za-z0-9]{20,}|AIza[A-Za-z0-9_-]{30,}|ghp_[A-Za-z0-9]{30,})" \
+            --include="*.py" --include="*.ts" --include="*.tsx" \
+            --include="*.yml" --include="*.yaml" --include="*.sh" \
+            . 2>/dev/null)
+          if [ -n "$matches" ]; then
+            echo "Possible committed credential:"
+            echo "$matches"
+            exit 1
+          fi
+          echo "No credential patterns found."
+
+          # A filled-in secret manifest must never be committed.
+          if [ -f k8s/secret.generated.yaml ]; then
+            echo "k8s/secret.generated.yaml is committed — it must stay gitignored"
+            exit 1
+          fi
+          if [ -f backend/.env.prod ]; then
+            echo "backend/.env.prod is committed — it must stay gitignored"
+            exit 1
+          fi
+          echo "No secret files committed."
+
+  # ------------------------------------------------------------- summary
+  ci-status:
+    name: CI status
+    runs-on: ubuntu-latest
+    needs: [lint-backend, lint-frontend, validate-k8s, test,
+            prod-dependency-check, docker-build, compose-config, security]
+    if: always()
+    steps:
+      # A single required check for branch protection, rather than
+      # maintaining a list of eight that drifts every time a job is added.
+      - name: Fail if any job failed
+        run: |
+          if echo '${{ join(needs.*.result, ",") }}' | grep -q -E "failure|cancelled"; then
+            echo "One or more CI jobs failed."
+            exit 1
+          fi
+          echo "All CI jobs passed."
