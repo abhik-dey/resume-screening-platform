@@ -35,6 +35,16 @@ else
   skip "ruff" "pip install ruff"
 fi
 
+step "GitHub Actions workflows"
+if command -v actionlint > /dev/null 2>&1; then
+  # Validates GitHub's expression language, which a YAML schema check cannot:
+  # an expression lives inside a string, so a quoting error is structurally
+  # valid YAML and a workflow-level parse failure.
+  run "actionlint" actionlint .github/workflows/ci.yml .github/workflows/cd.yml
+else
+  skip "actionlint" "https://github.com/rhysd/actionlint/releases"
+fi
+
 step "Kubernetes manifests"
 if python3 -c "import kubernetes_validate" 2>/dev/null; then
   run "schema + security assertions" python3 k8s/validate.py

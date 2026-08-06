@@ -73,6 +73,20 @@ jobs:
         working-directory: frontend
         run: npm run build
 
+  lint-workflows:
+    name: Lint the workflows themselves
+    runs-on: ubuntu-latest
+    # actionlint validates GitHub's EXPRESSION language, which a YAML schema
+    # validator cannot: an expression lives inside a string, so `${{ join(x,
+    # ",") }}` is structurally valid YAML and a workflow-level parse error.
+    # That exact mistake shipped once and only surfaced on push.
+    steps:
+      - uses: actions/checkout@v4
+      - name: actionlint
+        uses: docker://rhysd/actionlint:latest
+        with:
+          args: -color
+
   validate-k8s:
     name: Validate Kubernetes manifests
     runs-on: ubuntu-latest
@@ -206,6 +220,42 @@ jobs:
       - name: Report the resolved tree for the record
         working-directory: backend
         run: pip freeze
+
+      - name: Dockerfiles must copy every requirements file they reference
+        # A requirements file that exists on the host but was never COPYed
+        # into the image works locally and fails in the container. This has
+        # now happened twice: Phase 3 (alembic.ini) and Phase 24
+        # (requirements.lock, referenced by requirements-dev.txt but not
+        # copied by the dev Dockerfile).
+        run: |
+          python3 - <<'PY'
+          import re, sys, pathlib
+
+          failures = []
+          for dockerfile in ("backend/Dockerfile", "backend/Dockerfile.prod"):
+              content = pathlib.Path(dockerfile).read_text()
+              copied = set()
+              for line in content.splitlines():
+                  if line.strip().startswith("COPY") and "requirements" in line:
+                      copied |= set(re.findall(r"requirements[\w.-]*\.(?:txt|lock)", line))
+
+              # Every file the copied ones reference via -r must also be copied.
+              for name in list(copied):
+                  path = pathlib.Path("backend") / name
+                  if not path.exists():
+                      continue
+                  for ref in re.findall(r"^-r\s+(\S+)", path.read_text(), re.M):
+                      if ref not in copied:
+                          failures.append(
+                              f"{dockerfile}: copies {name}, which requires {ref}, "
+                              f"but {ref} is not copied"
+                          )
+
+          if failures:
+              print("\n".join(failures))
+              sys.exit(1)
+          print("All referenced requirements files are copied into both images.")
+          PY
 
   # -------------------------------------------------------------- docker
   docker-build:
@@ -373,16 +423,23 @@ jobs:
   ci-status:
     name: CI status
     runs-on: ubuntu-latest
-    needs: [lint-backend, lint-frontend, validate-k8s, test,
+    needs: [lint-backend, lint-frontend, lint-workflows, validate-k8s, test,
             prod-dependency-check, docker-build, compose-config, security]
     if: always()
     steps:
       # A single required check for branch protection, rather than
       # maintaining a list of eight that drifts every time a job is added.
+      # Using `contains()` in an `if:` condition rather than interpolating a
+      # joined string into a shell command. The interpolated form works, but
+      # it puts GitHub's expression syntax inside a shell string, where a
+      # quoting mistake is a workflow-level parse error that no YAML schema
+      # validator catches.
       - name: Fail if any job failed
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: |
-          if echo '${{ join(needs.*.result, ",") }}' | grep -q -E "failure|cancelled"; then
-            echo "One or more CI jobs failed."
-            exit 1
-          fi
-          echo "All CI jobs passed."
+          echo "One or more CI jobs failed. See the individual job logs above."
+          exit 1
+
+      - name: All checks passed
+        if: "!(contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))"
+        run: echo "All CI jobs passed."

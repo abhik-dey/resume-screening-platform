@@ -7,6 +7,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
+# requirements.lock is copied too, because requirements-dev.txt now layers
+# on top of it (-r requirements.lock). Omitting it breaks the dev image the
+# same way Phase 3 broke on a missing alembic.ini: the file exists on the
+# host, so it works locally, and the container has never seen it.
 COPY requirements.txt requirements-dev.txt requirements.lock ./
 RUN pip install --no-cache-dir -r requirements.txt
 
