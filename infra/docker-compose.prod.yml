@@ -1,0 +1,154 @@
+# Production stack.
+#
+# Kept separate from docker-compose.yml rather than layered onto it with
+# overrides. Conflating the two means production inherits development
+# conveniences (--reload, bind mounts, exposed ports) and developers pay
+# for production concerns. Two files, each simple.
+#
+#   make prod-up
+#
+# IMPORTANT — two different mechanisms read environment variables here:
+#
+#   `env_file:` supplies variables INSIDE a container.
+#   `${VAR}` interpolation in THIS file is resolved by Compose itself,
+#   which reads only the shell environment or a `.env` file sitting next
+#   to the compose file. It does NOT read a service's env_file.
+#
+# So backend/.env.prod alone is not enough: the postgres and grafana
+# services interpolate ${POSTGRES_PASSWORD} and ${GRAFANA_PASSWORD}, and
+# Compose needs those at parse time. `make prod-up` creates infra/.env as
+# a symlink to backend/.env.prod so one file serves both purposes.
+
+name: resume-screening-platform-prod
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:-resume_screening}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # No published port: nothing outside the compose network needs direct
+    # database access, and publishing it is how databases end up on the
+    # public internet.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [internal]
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    command: redis-server --save 60 1 --appendonly no
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [internal]
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.1
+    restart: always
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks: [internal]
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.prod
+    restart: always
+    env_file: [../backend/.env.prod]
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+      QDRANT_URL: http://qdrant:6333
+      # Production defaults that differ from development.
+      LOG_JSON: "true"
+      VECTOR_STORE_BACKEND: qdrant
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-4}
+    volumes:
+      # Named volume, not a bind mount: production images don't depend on
+      # host paths, and this is also why no root-owned files land in the
+      # working tree.
+      - resume_storage:/app/storage/resumes
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      qdrant: {condition: service_started}
+    networks: [internal]
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile.prod
+      args:
+        # Baked in at build time — Vite inlines env vars into the bundle,
+        # so this can't be changed at runtime. Relative path so the browser
+        # calls the same origin and nginx routes it.
+        VITE_API_BASE_URL: ""
+    restart: always
+    depends_on: [backend]
+    networks: [internal]
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: always
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on: [backend, frontend]
+    networks: [internal]
+
+  # --- Observability: Phase 18 exposed metrics that nothing collected ---
+
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    restart: always
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=15d"
+    # Internal only. Prometheus reaches the backend's /metrics on this
+    # network, which the edge proxy blocks from outside.
+    networks: [internal]
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    restart: always
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?GRAFANA_PASSWORD must be set}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      # Bound to loopback: reachable via an SSH tunnel, not from the
+      # internet. Grafana with a default password on a public port is a
+      # well-worn way to lose a cluster.
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    depends_on: [prometheus]
+    networks: [internal]
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  qdrant_data:
+  resume_storage:
+  prometheus_data:
+  grafana_data:

@@ -4,9 +4,12 @@ __pycache__/
 .venv/
 *.egg-info/
 
-# Env files
+# Env files — real secrets never committed, templates always are
 .env
+.env.prod
+infra/.env
 !.env.example
+!.env.prod.example
 
 # Node
 node_modules/

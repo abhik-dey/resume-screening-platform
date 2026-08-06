@@ -1,0 +1,16 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: resume-screening-backend
+    # Scraped over the internal network, where /metrics is reachable. The
+    # edge proxy blocks it from outside — that's the network policy the
+    # Phase 18 decision to leave it unauthenticated depended on.
+    static_configs:
+      - targets: ["backend:8000"]
+    metrics_path: /metrics
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

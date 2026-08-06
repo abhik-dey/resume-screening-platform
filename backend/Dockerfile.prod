@@ -1,0 +1,65 @@
+# Production backend image.
+#
+# Differences from the dev Dockerfile:
+#   - runs as a non-root user
+#   - Gunicorn with uvicorn workers, not `uvicorn --reload`
+#   - source copied in, never bind-mounted
+#   - no test dependencies
+FROM python:3.12-slim AS base
+
+# Build tools are needed to compile some wheels but have no business in the
+# final image, so they're installed and removed in one layer.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt gunicorn==23.0.0 \
+    && apt-get purge -y build-essential \
+    && apt-get autoremove -y
+
+# Create the runtime user BEFORE copying, so ownership is set correctly in
+# one step rather than needing a recursive chown afterwards.
+#
+# Running as root has been the cause of every root-owned file written into
+# bind mounts during development, and more importantly it means a container
+# escape starts with root rather than an unprivileged account.
+RUN groupadd --system --gid 1001 appuser \
+    && useradd --system --uid 1001 --gid appuser --create-home appuser
+
+COPY --chown=appuser:appuser app ./app
+COPY --chown=appuser:appuser alembic ./alembic
+COPY --chown=appuser:appuser alembic.ini ./
+
+# Storage must be writable by the runtime user. Created here rather than
+# relying on the volume mount to inherit correct ownership.
+RUN mkdir -p /app/storage/resumes && chown -R appuser:appuser /app/storage
+
+USER appuser
+
+EXPOSE 8000
+
+# Container-level health check. Compose and Kubernetes both use this to
+# decide whether traffic should reach the container.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -fsS http://localhost:8000/api/health || exit 1
+
+# Gunicorn manages uvicorn workers: multiple processes for multi-core use,
+# plus worker recycling if one wedges. `--reload` is absent deliberately.
+#
+# Worker count comes from an env var rather than being computed from CPU
+# count, because this application is I/O-bound on LLM calls rather than
+# CPU-bound — the usual (2 x cores + 1) heuristic doesn't apply, and the
+# right number depends on provider rate limits more than on hardware.
+CMD ["sh", "-c", "gunicorn app.main:app \
+    --worker-class uvicorn.workers.UvicornWorker \
+    --workers ${GUNICORN_WORKERS:-4} \
+    --bind 0.0.0.0:8000 \
+    --timeout ${GUNICORN_TIMEOUT:-120} \
+    --graceful-timeout 30 \
+    --max-requests 1000 \
+    --max-requests-jitter 100 \
+    --access-logfile - \
+    --error-logfile -"]
