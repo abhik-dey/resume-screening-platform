@@ -1,4 +1,7 @@
--r requirements.txt
+# Layered on the LOCKFILE so tests and production install the same
+# resolved tree. Installing -r requirements.txt here would reintroduce
+# the drift the lockfile exists to prevent.
+-r requirements.lock
 
 pytest==8.3.3
 pytest-asyncio==0.24.0

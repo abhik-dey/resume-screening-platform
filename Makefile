@@ -1,7 +1,7 @@
 .PHONY: up down logs ps backend-shell frontend-shell health clean \
 	prod-check prod-build prod-up prod-down prod-logs prod-ps prod-migrate prod-grafana \
 	k8s-validate k8s-secrets k8s-apply k8s-migrate k8s-status k8s-delete \
-	ci ci-fast
+	ci ci-fast lock backup backup-list backup-verify
 
 COMPOSE = docker compose -f infra/docker-compose.yml
 
@@ -131,3 +131,26 @@ ci:
 
 ci-fast:
 	./scripts/ci-local.sh fast
+
+# --- Hardening (Phase 24) ---
+
+# Regenerate the dependency lockfile after editing requirements.txt.
+#
+# The lock pins the ENTIRE resolved tree, not just direct dependencies.
+# Phase 15 broke because httpx was a transitive dependency resolved at
+# build time, so production and test installed different versions.
+lock:
+	cd backend && pip install pip-tools && pip-compile \
+	  --output-file=requirements.lock --strip-extras --no-header requirements.txt
+	@echo "Lockfile regenerated. Commit requirements.lock alongside requirements.txt."
+
+backup:
+	./scripts/backup.sh backup
+
+backup-list:
+	./scripts/backup.sh list
+
+# A backup you have never restored is not a backup.
+backup-verify:
+	@ls backups/*.sql.gz > /dev/null 2>&1 || (echo "No backups found — run 'make backup'" && exit 1)
+	./scripts/backup.sh verify "$$(ls -t backups/*.sql.gz | head -1)"

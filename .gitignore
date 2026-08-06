@@ -3,6 +3,9 @@ __pycache__/
 *.pyc
 .venv/
 *.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 
 # Env files — real secrets never committed, templates always are
 .env
@@ -25,3 +28,7 @@ dist/
 # IDE
 .vscode/
 .idea/
+
+# Database backups — may contain candidate personal data
+backups/
+*.sql.gz

@@ -15,8 +15,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt gunicorn==23.0.0 \
+# Install from the LOCKFILE, not requirements.txt.
+#
+# requirements.txt pins 27 direct dependencies and leaves ~65 transitive
+# ones to be resolved at build time. That is exactly how Phase 15 broke:
+# httpx resolved to 0.28 in the production image while tests ran against
+# 0.27, and 588 tests passed against a build that couldn't construct an
+# API client.
+#
+# requirements.lock pins the entire resolved tree, so this image and the
+# test environment install byte-identical dependencies.
+#
+# Regenerate with: make lock
+COPY requirements.lock .
+RUN pip install --no-cache-dir -r requirements.lock gunicorn==23.0.0 \
     && apt-get purge -y build-essential \
     && apt-get autoremove -y
 

@@ -1,0 +1,288 @@
+aiofiles==24.1.0
+    # via -r requirements.txt
+alembic==1.13.2
+    # via -r requirements.txt
+annotated-types==0.8.0
+    # via pydantic
+anthropic==0.36.1
+    # via -r requirements.txt
+anyio==4.14.2
+    # via
+    #   anthropic
+    #   httpx
+    #   langsmith
+    #   openai
+    #   starlette
+    #   watchfiles
+asgiref==3.12.1
+    # via opentelemetry-instrumentation-asgi
+asyncpg==0.29.0
+    # via -r requirements.txt
+bcrypt==4.0.1
+    # via
+    #   -r requirements.txt
+    #   passlib
+certifi==2026.7.22
+    # via
+    #   httpcore
+    #   httpx
+    #   requests
+chardet==7.5.1
+    # via reportlab
+charset-normalizer==3.4.9
+    # via requests
+click==8.4.2
+    # via
+    #   huggingface-hub
+    #   uvicorn
+deprecated==1.3.1
+    # via
+    #   opentelemetry-api
+    #   opentelemetry-semantic-conventions
+distro==1.9.0
+    # via
+    #   anthropic
+    #   langsmith
+    #   openai
+dnspython==2.8.0
+    # via email-validator
+email-validator==2.2.0
+    # via -r requirements.txt
+fastapi==0.115.0
+    # via -r requirements.txt
+filelock==3.32.2
+    # via huggingface-hub
+fsspec==2026.7.0
+    # via huggingface-hub
+greenlet==3.5.4
+    # via sqlalchemy
+grpcio==1.83.0
+    # via
+    #   grpcio-tools
+    #   qdrant-client
+grpcio-tools==1.83.0
+    # via qdrant-client
+h11==0.16.0
+    # via
+    #   httpcore
+    #   uvicorn
+h2==4.4.1
+    # via httpx
+hf-xet==1.6.0
+    # via huggingface-hub
+hpack==4.2.0
+    # via h2
+httpcore==1.0.9
+    # via httpx
+httptools==0.8.0
+    # via uvicorn
+httpx==0.27.2
+    # via
+    #   -r requirements.txt
+    #   anthropic
+    #   huggingface-hub
+    #   langgraph-sdk
+    #   langsmith
+    #   openai
+    #   qdrant-client
+huggingface-hub==1.26.1
+    # via tokenizers
+hyperframe==6.1.0
+    # via h2
+idna==3.18
+    # via
+    #   anyio
+    #   email-validator
+    #   httpx
+    #   requests
+importlib-metadata==8.4.0
+    # via opentelemetry-api
+jiter==0.16.0
+    # via
+    #   anthropic
+    #   openai
+jsonpatch==1.33
+    # via langchain-core
+jsonpointer==3.1.1
+    # via jsonpatch
+langchain-core==0.3.86
+    # via
+    #   langgraph
+    #   langgraph-checkpoint
+langgraph==0.2.39
+    # via -r requirements.txt
+langgraph-checkpoint==2.1.2
+    # via langgraph
+langgraph-sdk==0.1.74
+    # via langgraph
+langsmith==0.10.16
+    # via langchain-core
+lxml==6.1.1
+    # via python-docx
+mako==1.4.1
+    # via alembic
+markupsafe==3.0.3
+    # via mako
+numpy==2.5.1
+    # via qdrant-client
+openai==1.51.0
+    # via -r requirements.txt
+opentelemetry-api==1.27.0
+    # via
+    #   -r requirements.txt
+    #   opentelemetry-instrumentation
+    #   opentelemetry-instrumentation-asgi
+    #   opentelemetry-instrumentation-fastapi
+    #   opentelemetry-sdk
+    #   opentelemetry-semantic-conventions
+opentelemetry-instrumentation==0.48b0
+    # via
+    #   opentelemetry-instrumentation-asgi
+    #   opentelemetry-instrumentation-fastapi
+opentelemetry-instrumentation-asgi==0.48b0
+    # via opentelemetry-instrumentation-fastapi
+opentelemetry-instrumentation-fastapi==0.48b0
+    # via -r requirements.txt
+opentelemetry-sdk==1.27.0
+    # via -r requirements.txt
+opentelemetry-semantic-conventions==0.48b0
+    # via
+    #   opentelemetry-instrumentation-asgi
+    #   opentelemetry-instrumentation-fastapi
+    #   opentelemetry-sdk
+opentelemetry-util-http==0.48b0
+    # via
+    #   opentelemetry-instrumentation-asgi
+    #   opentelemetry-instrumentation-fastapi
+orjson==3.11.9
+    # via
+    #   langgraph-sdk
+    #   langsmith
+ormsgpack==1.12.2
+    # via langgraph-checkpoint
+packaging==25.0
+    # via
+    #   huggingface-hub
+    #   langchain-core
+    #   langsmith
+passlib==1.7.4
+    # via -r requirements.txt
+pillow==12.3.0
+    # via reportlab
+portalocker==2.10.1
+    # via qdrant-client
+prometheus-client==0.21.0
+    # via -r requirements.txt
+protobuf==7.35.1
+    # via grpcio-tools
+pydantic==2.9.2
+    # via
+    #   -r requirements.txt
+    #   anthropic
+    #   fastapi
+    #   langchain-core
+    #   langsmith
+    #   openai
+    #   pydantic-settings
+    #   qdrant-client
+pydantic-core==2.23.4
+    # via pydantic
+pydantic-settings==2.5.2
+    # via -r requirements.txt
+pyjwt==2.9.0
+    # via -r requirements.txt
+pypdf==5.0.1
+    # via -r requirements.txt
+python-docx==1.1.2
+    # via -r requirements.txt
+python-dotenv==1.0.1
+    # via
+    #   -r requirements.txt
+    #   pydantic-settings
+    #   uvicorn
+python-multipart==0.0.9
+    # via -r requirements.txt
+pyyaml==6.0.3
+    # via
+    #   huggingface-hub
+    #   langchain-core
+    #   uvicorn
+qdrant-client==1.12.0
+    # via -r requirements.txt
+redis==5.0.8
+    # via -r requirements.txt
+reportlab==4.2.5
+    # via -r requirements.txt
+requests==2.34.2
+    # via
+    #   langsmith
+    #   requests-toolbelt
+requests-toolbelt==1.0.0
+    # via langsmith
+sniffio==1.3.1
+    # via
+    #   anthropic
+    #   httpx
+    #   langsmith
+    #   openai
+sqlalchemy==2.0.35
+    # via
+    #   -r requirements.txt
+    #   alembic
+starlette==0.38.6
+    # via fastapi
+tenacity==9.1.4
+    # via langchain-core
+tokenizers==0.23.1
+    # via anthropic
+tqdm==4.70.0
+    # via
+    #   huggingface-hub
+    #   openai
+typing-extensions==4.16.0
+    # via
+    #   alembic
+    #   anthropic
+    #   anyio
+    #   fastapi
+    #   grpcio
+    #   huggingface-hub
+    #   langchain-core
+    #   langsmith
+    #   openai
+    #   opentelemetry-sdk
+    #   pydantic
+    #   pydantic-core
+    #   python-docx
+    #   sqlalchemy
+urllib3==2.7.0
+    # via
+    #   qdrant-client
+    #   requests
+uuid-utils==0.17.0
+    # via
+    #   langchain-core
+    #   langsmith
+uvicorn==0.30.6
+    # via -r requirements.txt
+uvloop==0.22.1
+    # via uvicorn
+watchfiles==1.2.0
+    # via uvicorn
+websockets==17.0.1
+    # via
+    #   langsmith
+    #   uvicorn
+wrapt==1.17.3
+    # via
+    #   deprecated
+    #   opentelemetry-instrumentation
+xxhash==3.8.1
+    # via langsmith
+zipp==4.1.0
+    # via importlib-metadata
+zstandard==0.25.0
+    # via langsmith
+
+# The following packages are considered to be unsafe in a requirements file:
+# setuptools
