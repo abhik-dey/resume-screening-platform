@@ -15,6 +15,12 @@ education    0.67  ×  0.15  =  0.100
                               0.780
 ```
 
+![Score decomposition](docs/screenshot-scoring.png)
+
+*A real resume scored against a Senior Platform Engineer role. Experience
+scores zero with the reason stated — the system explains a zero rather than
+silently producing one.*
+
 Eight specialised agents parse resumes, extract and normalise skills, score
 candidates against a job, rank them, generate tailored interview questions,
 produce feedback with a hiring recommendation, and assemble a PDF report.
@@ -204,6 +210,8 @@ curl -X POST localhost:8000/api/v1/jobs/$JOB_ID/pipeline \
   -H "Authorization: Bearer $TOKEN"
 ```
 
+![Pipeline run](docs/screenshot-pipeline.png)
+
 ### Fatal vs non-fatal steps
 
 Not every failure should stop a run:
@@ -269,6 +277,12 @@ curl -X POST localhost:8000/api/v1/rag/ask \
 **Embeddings do not touch the match score.** Blending cosine similarity into it
 would destroy the determinism the scoring was built for. Embeddings serve
 *discovery*; the arithmetic score serves *evaluation*.
+
+![RAG answer with citations](docs/screenshot-rag.png)
+![Retrieved sources](docs/screenshot-sources.png)
+
+*Every claim cites a source, and the exact retrieved text is returned
+alongside it — so the claim can be checked, not just trusted.*
 
 ### Groundedness is enforced in code, not requested in a prompt
 
@@ -587,6 +601,8 @@ make backup           # dump, gzip, verify, prune
 make backup-verify    # check the latest backup is restorable
 ./scripts/backup.sh restore backups/FILE.sql.gz
 ```
+
+A [sample generated report](docs/sample-report.pdf) is included in this repo.
 
 **A backup you have never restored is not a backup**, so `verify` checks the
 archive is intact *and* contains real schema — a gzip that decompresses to
